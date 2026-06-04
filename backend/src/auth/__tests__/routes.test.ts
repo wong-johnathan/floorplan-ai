@@ -47,7 +47,7 @@ describe('POST /api/auth/logout', () => {
       .set('Cookie', `token=${token}`);
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ok: true });
-    const setCookieHeader = res.headers['set-cookie'] as string[] | undefined;
+    const setCookieHeader = res.headers['set-cookie'] as unknown as string[] | undefined;
     expect(setCookieHeader?.some((c) => c.startsWith('token=;'))).toBe(true);
   });
 });

@@ -1,34 +1,37 @@
-import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import morgan from "morgan";
-import dotenv from "dotenv";
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import morgan from 'morgan';
+import cookieParser from 'cookie-parser';
+import dotenv from 'dotenv';
+import authRouter from './auth/routes';
 
 dotenv.config();
 
+const required = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL', 'JWT_SECRET'];
+for (const key of required) {
+  if (!process.env[key]) {
+    console.error(`Missing required env var: ${key}`);
+    process.exit(1);
+  }
+}
+
 const app = express();
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT ?? 4000;
+const FRONTEND_URL = process.env.FRONTEND_URL ?? 'http://localhost:3000';
 
-// Middleware
 app.use(helmet());
-app.use(cors());
-app.use(morgan("dev"));
+app.use(cors({ origin: FRONTEND_URL, credentials: true }));
+app.use(morgan('dev'));
 app.use(express.json());
+app.use(cookieParser());
 
-// Health check
-app.get("/api/health", (_req, res) => {
-  res.json({
-    status: "ok",
-    service: "floorplan-ai-backend",
-    timestamp: new Date().toISOString(),
-  });
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', service: 'floorplan-ai-backend', timestamp: new Date().toISOString() });
 });
 
-// Placeholder routes
-app.get("/api/bto/projects", (_req, res) => {
-  res.json({ data: [], message: "BTO projects endpoint — coming soon" });
-});
+app.use('/api/auth', authRouter);
 
 app.listen(PORT, () => {
-  console.log(`🚀 Backend running on http://localhost:${PORT}`);
+  console.log(`Backend running on http://localhost:${PORT}`);
 });
