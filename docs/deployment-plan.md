@@ -1,54 +1,34 @@
 # Docker-Compose Deployment Plan
 
-## HDB Interior Design Web App — Split Architecture
+## HDB Interior Design Web App — Local Development
 
 | Field | Value |
 |-------|-------|
-| **Status** | Planning Document v1.0 |
-| **Date** | 2026-06-03 |
-| **Author** | Hermes Agent |
-| **Based on** | architecture.md, technical-specification.md, PRD.md, planning.md, wall-editing-architecture.md |
+| **Status** | Active v2.0 |
+| **Date** | 2026-06-04 |
+| **Scope** | Local development only (production deployment TBD) |
+
+> **Decision:** The stack is Vite + React 19 frontend + Express TypeScript backend. Docker Compose is the local development environment. Production deployment strategy is out of scope for now.
 
 ---
 
-## 1. FEASIBILITY ASSESSMENT
+## 1. Architecture Decision
 
-### 1.1 Is the docker-compose architecture feasible?
+The app is a **frontend/backend split** (not a Next.js monolith):
 
-**Yes, but with major architectural changes.** The current spec is a Next.js monolith (App Router serving both frontend and API routes). Splitting into separate frontend and backend services requires significant refactoring:
+| Component | Implementation |
+|-----------|---------------|
+| **Frontend** | Vite + React 19 + TypeScript, served by Vite dev server (hot reload) |
+| **Backend** | Express + TypeScript, Prisma for DB access, JWT auth |
+| **Database** | PostgreSQL 16 (Docker container in dev) |
+| **Cache** | Redis 7 (Docker container in dev) |
+| **File Storage** | Cloudflare R2 (external; dev uses real R2 or MinIO emulator) |
+| **AI** | Gemini API (external; called from backend) |
 
-### 1.2 What Must Change from the Current Next.js-Only Plan
-
-| Component | Current (Monolith) | Docker-Compose Split | Effort |
-|-----------|-------------------|---------------------|--------|
-| **API Routes** | Next.js API routes in `app/api/` | Separate Express/Fastify backend service | **High** — rewrite all route handlers |
-| **Prisma** | `@prisma/client` in Next.js | Prisma runs in backend only | **Medium** — move schema + client |
-| **NextAuth** | Handles sessions + JWT | Must switch to JWT-only (stateless) or proxy auth | **High** — NextAuth tightly coupled to Next.js |
-| **R2 Signed URLs** | AWS SDK in API route | Backend generates signed URLs, frontend calls backend | **Low** — just move endpoint |
-| **Gemini AI** | Called from API route | Backend calls Gemini, frontend calls backend | **Low** |
-| **3D Rendering** | Client-side R3F (stays in browser) | No change — still client-side | **None** |
-| **Floor Plan Editor** | Client-side react-konva (stays in browser) | No change — still client-side | **None** |
-| **File Uploads** | Direct to R2 via signed URL | Frontend gets signed URL from backend → uploads to R2 directly | **Low** |
-| **Deployment** | Vercel (single deploy) | Docker Compose on any host | New deployment infra needed |
-
-### 1.3 What Stays the Same
-
-- Client-side 3D (R3F + Three.js) — no server-side change
-- Client-side floor plan editor (react-konva) — no change
-- Client-side furniture drag system (Zustand + drei DragControls)
-- Cloudflare R2 bucket structure
-- Database schema (Prisma models)
-- Gemini AI models and prompts
-
-### 1.4 What Is Lost vs Vercel
-
-| Vercel Feature | Docker Alternative |
-|---------------|-------------------|
-| Edge Functions (low-latency global) | Single-region server (e.g. Singapore) |
-| Automatic CDN + caching | Nginx + Cloudflare R2 CDN |
-| Preview Deploys per PR | Feature branches + docker-compose profiles |
-| Serverless auto-scaling | Docker Swarm / K8s if needed |
-| PgBouncer bundled with Supabase | PgBouncer sidecar or built-in pooling |
+**What runs client-side (never changes regardless of deployment):**
+- 3D engine (R3F + Three.js) — mesh generation, export, furniture drag
+- Floor plan editor (react-konva)
+- All Zustand state
 
 ---
 
@@ -62,7 +42,7 @@
 │                                                                           │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐               │
 │  │   nginx       │    │   frontend    │    │   backend     │               │
-│  │   :80/:443    │───►│  Next.js SSR  │───►│  Express/Fastify             │
+│  │   :80/:443    │───►│  Vite dev     │───►│  Express TS  │               │
 │  │  (reverse     │    │  :3000       │    │  :4000       │               │
 │  │   proxy)      │    └──────────────┘    └──────┬───────┘               │
 │  └──────────────┘                                │                        │

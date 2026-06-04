@@ -32,24 +32,27 @@ A web application that lets HDB homeowners bring their future flat to life — f
 
 | Layer | Choice | Rationale |
 |-------|--------|-----------|
-| **Frontend Framework** | Next.js 16 (App Router) | User's established stack, SSR for landing, API routes |
+| **Frontend Framework** | Vite + React 19 + TypeScript | Fast HMR, SPA architecture, no SSR needed for this app |
 | **3D Engine** | React Three Fiber (R3F) + Three.js | Declarative 3D for React; full control over mesh generation |
-| **UI Components** | shadcn/ui + Tailwind CSS v4 | User's preferred library; rapid, consistent UI |
+| **UI Components** | shadcn/ui + Tailwind CSS v4 | Rapid, consistent UI; works with any React setup |
 | **Chat Interface** | Custom component (shadcn-based) | Multi-turn conversational AI design consultant |
 | **State Management** | Zustand | Lightweight, R3F-compatible, no boilerplate |
-| **Floor Plan Annotation** | react-konva (Canvas overlay) | Admin panel wall-drawing tool |
-| **Database** | PostgreSQL (Supabase) + Prisma ORM | Users, projects, BTO projects, templates, design briefs, renders |
+| **Data Fetching** | TanStack Query | Server state, caching, request deduplication |
+| **Routing** | React Router v7 | Client-side routing |
+| **Floor Plan Annotation** | react-konva (Canvas overlay) | Wall-drawing tool for both admin and user editor |
+| **Backend** | Express + TypeScript | REST API; proxies Gemini calls, handles DB access |
+| **Database** | PostgreSQL + Prisma ORM | Users, projects, BTO templates, design briefs, renders |
 | **File Storage** | Cloudflare R2 | S3-compatible, zero egress fees |
 | **3D Export** | Three.js ColladaExporter / OBJExporter | Client-side export; no backend needed |
 | **AI Design Consultant** | Gemini 2.5 Pro | Multi-turn chat → structured Design Brief JSON |
 | **AI Rendering** | Gemini Imagen | Photorealistic per-room renders from 3D base + design brief |
-| **Authentication** | NextAuth.js (Auth.js) | Google OAuth only |
-| **Deployment** | Vercel (frontend + API routes) | Zero-config, edge functions |
-| **Queue** | None (MVP) → BullMQ + Redis (v2) | Not needed until batch operations |
+| **Authentication** | JWT via Express | Google OAuth flow proxied through backend |
+| **Local Dev** | Docker Compose | Frontend + backend + Postgres + Redis in one command |
+| **Queue** | None (MVP) → BullMQ + Redis (v2) | Not needed until batch render volume grows |
 
-### 3.1 Why No Separate Python Backend?
+### 3.1 Frontend/Backend Split
 
-All heavy 3D operations (mesh generation, format export/import) are handled **client-side in the browser** using Three.js. Gemini API calls are proxied through Next.js API routes. This eliminates the need for a separate Python/FastAPI server or Redis queue.
+All heavy 3D operations (mesh generation, format export/import) are handled **client-side in the browser** using Three.js. The Express backend handles database access, Gemini API proxying, file upload signing, and authentication. This split is orchestrated locally via Docker Compose.
 
 ---
 
@@ -87,77 +90,77 @@ All heavy 3D operations (mesh generation, format export/import) are handled **cl
 ## 5. Full User Flow
 
 ```
-1. Sign Up (Google OAuth)
+1. Sign Up / Log In (Google OAuth)
        │
-2. BTO Project Discovery
-   │ Select your BTO project: "Verandah Kallang 2024"
-   │ If not found: "This project isn't in our library yet — check back soon!"
+2. BTO Project Search & Selection
+   │ Search by: year, project name, location
+   │ Filter chips: year (2024, 2025, 2026), town (Kallang, Queenstown...)
+   │ If not found: "Not in our library yet — check back soon"
        │
-3. Select Flat Model
-   │ 4-Room / 5-Room variant within the BTO project
-   │ Shows floor plan preview + unit stats (sqm, room count)
+3. Room Type + Model Variant Selection
+   │ Select room count: 2-Room / 3-Room / 4-Room / 5-Room / Executive
+   │ Select model variant within room type
+   │   → Different variants = different layouts (bomb shelter position,
+   │     balcony side, kitchen orientation, etc.)
+   │ Preview thumbnail + stats (sqm, room count)
        │
-       ├── [Start Designing → Default Layout] ──────────────────┐
-       │                                                       │
-       ▼                                                        │
-4. **Edit Floor Plan** (optional)                               │
-   │ 2D floor plan editor with wall segments                    │
-   │ Tools: Select, Draw Wall, Delete Wall                      │
-   │ 🧱 Load-bearing walls highlighted — cannot delete          │
-   │ Knock down a wall → rooms merge automatically              │
-   │ Draw a new wall → room splits                              │
-   │ Doors/windows shift with their walls                       │
-   │ Structural walls visually distinct, non-deletable          │
-   │ Snap-to-wall, grid snapping, undo/redo                    │
-   │ Live 3D preview of changes in side panel                   │
-   │ [↩ Undo] [↪ Redo] [Reset to Original] [Apply Changes]     │
-       │                                                       │
-       ▼                                                        │
-5. **3D Model Loads** (from edited or default wall set)         │
-   │ Empty shell (walls, floors, windows, doors)               │
-   │ Interactive viewport — orbit, zoom, room labels           │
-   │ Room labels reflect the user's edited layout              │
-       │                                                       │
-6. AI Design Consultant (Chat)                                  │
-   │ "I'd like a Japandi feel overall"                         │
-   │ "I'd like a Japandi feel overall"
-   │ AI: "Great choice! Light oak or dark walnut flooring for the living?"
-   │ User: "Light oak. But kitchen should be vintage green tiles"
-   │ AI: "Got it! Kitchen: green subway tile. MBR continue Japandi or different?"
-   │ ... iterative until user says "I'm happy" ──────────────────┐
-       │                                                         │
-       ▼ Design Brief JSON accumulates per-room:                 │
-   { overall: "Japandi"                                          │
-     rooms: { living: {...}, kitchen: {...}, mbr: {...} } }      │
-       │                                                         │
-7. [Auto-Furnish with Templates]  or  [Export to SketchUp]
-   │ Furniture placed in 3D viewport (PBR materials visible)
-   │ Real-time style preview — no AI render needed
+       ▼
+4. 2D Floor Plan Editor  ← PRIMARY CANVAS
+   │ Pre-loaded: walls, doors, windows from admin template
+   │ Shape library sidebar (categorised by room type):
+   │   Walls & Doors | Bedroom | Living | Kitchen | Dining | Bathroom
+   │ What the user can do:
+   │   • Drag 2D furniture shapes from library onto canvas
+   │   • Resize walls (drag endpoints)
+   │   • Move doors and windows along a wall
+   │   • Add or delete non-structural walls
+   │   • 🧱 Structural walls are highlighted — cannot be removed
+   │   • Snap-to-grid (25cm), snap-to-wall for furniture
+   │   • [↩ Undo] [↪ Redo] [Reset to Template]
        │
-8. Generate Sample Render
-   │ 1 room (Living Room by default) → Gemini Imagen
-   │ Cost: ~$0.04 per sample
-   │ User reviews: "Does this match your vision?"
+       ▼
+5. Room Demarking / Labelling
+   │ User assigns a label to each enclosed area:
+   │   Bedroom 1, Bedroom 2, Master Bedroom, Kitchen,
+   │   Living Room, Dining, Study, Toilet 1, Toilet 2,
+   │   Bomb Shelter, Yard, Balcony, Storeroom…
+   │ System suggests labels based on room shape + area
+   │ User confirms or overrides each label
+   │ [Done — Start Designing]
        │
-   ├── [Looks Great!] ──────────────────────────────────────┐
-   │                                                        │
-9. Tweak & Iterate (if needed)                              │
-   │ User adjusts: style prompt, furniture, materials       │
-   │ → [Regenerate Sample] until satisfied                  │
-   │ Cost: ~$0.04 per iteration                              │
-       │                                                    │
-10. Final Render                                             │
-   │ All rooms, multiple auto-calculated angles             │
-   │ User can also add custom camera angles                 │
-   │ Cost: ~$0.30-0.50 for full HDB unit                     │
-   │ Progress: "Rendering Room 3 of 8..."                   │
-       │                                                    │
-11. Gallery & Share                                         │
-    │ View all renders by room  │  Download HD
-    │ Share link with slider    │  Add custom angles
-    │ Breadcrumb: Brief > Furniture > Renders
-    │ Click any breadcrumb to go back and edit
+       ▼
+6. AI Design Consultant (Chat)
+   │ Starts with labelled rooms from Step 5 as context
+   │ Two modes:
+   │   [Overall Vibe] → AI designs all rooms in one style
+   │   [Room by Room] → User styles each labelled room individually
+   │ AI: "You have 3 bedrooms, a living room, and an open kitchen.
+   │       What overall feel are you going for?"
+   │ User: "Japandi overall, but kitchen with vintage green tiles"
+   │ AI asks follow-ups one room / one decision at a time
+   │ Design Brief JSON builds per labelled room:
+   │   { overall: "Japandi", rooms: { "Master Bedroom": {...},
+   │     "Kitchen": { style: "Vintage", wallTile: "green subway" } } }
+   │ [I'm Happy → Generate Renders]
+       │
+       ▼
+7. 3D Render Generation
+   │ The 2D floor plan + design brief → Gemini Imagen
+   │ Sample render first: 1 room (~$0.04), user reviews
+   │ Tweak prompt if needed → regenerate
+   │ Final batch: all labelled rooms at auto-calculated angles
+   │ Progress: "Rendering Room 3 of 6..."
+   │ Cost: ~$0.30–0.50 for full flat
+       │
+       ▼
+8. Gallery & Share
+   │ View renders by room label  │  Download HD
+   │ Before/after slider (empty flat vs. styled)
+   │ Shareable public link
+   │ Click any breadcrumb to go back and edit
 ```
+
+**Key principle:** The 2D floor plan editor is the primary working canvas. Users think and plan in 2D (the way floor plans are naturally read). 3D rendering is the final output — a photorealistic reward for completing the design, not the working environment.
 
 ---
 
@@ -168,41 +171,36 @@ All heavy 3D operations (mesh generation, format export/import) are handled **cl
 | Feature | Description | Acceptance Criteria |
 |---------|-------------|-------------------|
 | **OAuth Login** | Sign up with Google; auto-fill profile | User logs in with Google, name/email populated |
-| **BTO Project Discovery** | Search/select from pre-configured BTO projects | Show BTO list; indicate if not yet available |
-| **Flat Model Selector** | Pick specific 4-room/5-room layout for selected BTO | Shows floor plan preview, room count, sqm |
-| **Floor Plan Wall Editor** | Interactive 2D floor plan editor — select, delete, and draw wall segments | Knock down a wall → rooms auto-merge. Draw a wall → room splits. Doors shift with walls. |
-| **3D Model Generation** | Generate HDB-standard 3D model from wall segments (not just polygons) | Walls at 2.8m, correct room layout, doors/windows properly placed |
-| **3D Viewport** | Interactive browser 3D view | Orbit, pan, zoom, room labels, walkthrough mode |
-| **AI Design Consultant (Chat)** | Multi-turn conversational AI that builds a per-room design brief | User types "Japandi feel" → AI asks follow-ups → all rooms styled |
-| **Per-Room Design Brief** | Each room tracked independently | Living room can be Japandi, kitchen can be vintage, renders reflect both |
-| **Auto-Furnish (Room Templates)** | Pre-designed furniture layouts per room type × style | "Japandi living room" template places sofa, coffee table, rug, etc. |
-| **SketchUp Export** | Download furnished/unfurnished 3D model as Collada (.dae) | Opens in SketchUp Pro with correct room geometry |
-| **SketchUp Re-import** | Upload edited .dae back | Furniture merges into scene |
-| **Photorealistic Renders** | Gemini Imagen generates per-room realistic images from 3D view + design brief | One render per room; downloadable |
-| **Render Gallery** | View all room renders in a grid | Thumbnails + full-size view |
-| **Admin: BTO Project Management** | Create/edit BTO projects with floor plan upload | Full admin CRUD |
-| **Admin: Room Annotation** | Draw wall segments on floor plan, system auto-detects rooms; label rooms, mark load-bearing walls | Wall drawing + auto room detection + property panel |
+| **BTO Project Search** | Search by year, project name, location; filter chips | BTO list loads; empty state if not found |
+| **Room Type + Model Selector** | Pick room count (2–5 room) then specific model variant | Shows thumbnail, sqm, variant description |
+| **2D Floor Plan Editor** | Primary canvas — drag furniture shapes, resize walls, move doors/windows | Shape library sidebar; snap-to-grid; undo/redo; structural walls blocked |
+| **Furniture Shape Library** | Categorised 2D shapes (Bedroom, Living, Kitchen, Dining, Bathroom, Walls & Doors) | Drag shapes from sidebar onto canvas; shapes scale correctly |
+| **Room Demarking / Labelling** | User assigns a label to each enclosed area | All areas labelled; labels drive AI context and render prompts |
+| **AI Design Consultant (Chat)** | Multi-turn chat building a per-labelled-room design brief; overall vibe or room-by-room modes | "Japandi feel" → AI asks follow-ups → brief complete for all rooms |
+| **Photorealistic Renders** | Gemini Imagen generates per-room renders from 2D plan + design brief | Sample render (1 room) → approve → batch all rooms |
+| **Render Gallery** | View all room renders by label; before/after slider | Thumbnails + full-size; download HD |
+| **Admin: BTO Project Management** | Create BTO projects, upload floor plan image, draw wall segments, mark structural walls | Admin can publish a BTO project in < 20 min |
 
 ### P1 — Next Phase (Should Have)
 
 | Feature | Description |
 |---------|-------------|
 | **History & iterations** | Save multiple design briefs per project; compare |
-| **Shareable render pages** | Public before/after link; client can share with family |
-| **Render quality tiers** | Standard (free, 1024px) vs. HD (paid, 2048px) vs. 4K (premium, 4096px) |
+| **Shareable render pages** | Public before/after link; share with family/partner |
 | **Batch render** | Render all rooms in one click; progress tracking |
-| **Furniture swap** | User picks individual furniture pieces from library; replaces AI-chosen ones |
-| **Custom floor plan upload** | User uploads their own floor plan (non-BTO units) for manual annotation |
+| **Custom floor plan upload** | User uploads their own floor plan (non-BTO units) |
+| **SketchUp export** | Download 2D floor plan as DXF or 3D shell as Collada (.dae) |
+| **Render quality tiers** | Standard (1024px) vs. HD (2048px) |
 
 ### P2 — Nice to Have
 
 | Feature | Description |
 |---------|-------------|
-| **360° Panorama renders** | VR-style walkthrough of the entire flat |
-| **AR preview** | Point phone camera at empty room → see rendered design overlaid |
-| **Mood board from reference image** | Upload a Pinterest photo → AI extracts palette + style → applies to model |
+| **360° Panorama renders** | VR-style walkthrough of the rendered flat |
+| **Mood board from reference image** | Upload a Pinterest photo → AI extracts palette + style |
 | **Renovation cost estimator** | Estimate costs from selected materials + room dimensions |
 | **Multi-user collaboration** | Couple can both work on the same project |
+| **AR preview** | Point phone camera at empty room → see rendered design overlaid |
 | **Contractor marketplace** | Find IDs/contractors who work in the chosen style |
 
 ---
@@ -506,8 +504,4 @@ Furniture: Low-profile wooden sofa, oval coffee table, tatami-style rug, floor l
 ## 12. Open Questions (To Be Decided)
 
 1. **Furniture templates scope** — How many room template variations per style? (5? 10? 20?)
-2. **Render credit model** — Free X renders/month? Or unlimited but low-res?
-3. **Competition landscape** — Are there Singapore-specific competitors in this space?
-4. **BTO project data** — Scope: all HDB BTO projects from **2025 onwards**. Do you have floor plans for Verandah Kallang, Queenstown, and upcoming 2025 launches?
-5. **Pricing** — Freemium (limited renders) vs subscription vs one-off per project?
-6. **Brand name** — Do you have a name in mind for the app?
+2. **Competition landscape** — Are there Singapore-specific competitors in this space? (See `competitive-analysis.md`)
