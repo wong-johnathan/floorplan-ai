@@ -4,10 +4,10 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Draft v3.0 |
-| **Date** | 2026-06-03 |
+| **Status** | Draft v4.0 |
+| **Date** | 2026-06-04 |
 | **Author** | Johnathan Wong |
-| **Previous** | v2.0 (pre-wall-editing) |
+| **Previous** | v3.0 (Next.js monolith) |
 
 > **Note:** This document describes the overall architecture. For the complete wall-editing subsystem (data models, shared-wall algorithm, floor plan editor, validation), see **[wall-editing-architecture.md](./wall-editing-architecture.md)** which supersedes RoomConfig-related sections.
 
@@ -17,10 +17,10 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                          CLIENT (Browser)                                 │
+│                    CLIENT (Browser — Vite + React 19)                     │
 │                                                                           │
 │  ┌────────────┐  ┌──────────────────────┐  ┌────────────────────────┐   │
-│  │ Next.js UI  │  │  3D Engine (R3F)      │  │ Floor Plan Editor       │   │
+│  │ React SPA   │  │  3D Engine (R3F)      │  │ Floor Plan Editor       │   │
 │  │             │  │  ┌────────────────┐   │  │ (react-konva)           │   │
 │  │ Landing     │  │  │ Mesh Generator │   │  │ ┌──────────────────┐ │   │
 │  │ Browse      │  │  │(Wall Segments) │   │  │ │ Wall Canvas      │ │   │
@@ -37,47 +37,81 @@
 │  │  → [Label Rooms + Mark Load-Bearing] → [Save]                     │   │
 │  └──────────────────────────────────────────────────────────────────┘    │
 └──────────────────────────────────────────────────────────────────────────┘
-                              │ API Calls (HTTPS)
+                              │ REST API (HTTP)
                               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                     NEXT.JS API ROUTES (Vercel)                           │
+│                    EXPRESS BACKEND (TypeScript, port 4000)                 │
 │                                                                           │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
 │  │ BTO      │  │ Projects │  │ AI       │  │ Render   │  │ Auth     │  │
-│  │ Projects │  │ CRUD     │  │ Consultant│  │ (Gemini  │  │ (NextAuth│  │
-│  │ + Models │  │          │  │ (Chat    │  │  Imagen) │  │  + OAuth)│  │
-│  │ CRUD     │  │          │  │  + Brief)│  │          │  │          │  │
+│  │ Projects │  │ CRUD     │  │ Consultant│  │ (Gemini  │  │ (JWT +   │  │
+│  │ + Models │  │          │  │ (Chat    │  │  Imagen) │  │  Google  │  │
+│  │ CRUD     │  │          │  │  + Brief)│  │          │  │  OAuth)  │  │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  │
 │       │              │             │              │              │       │
 └───────┼──────────────┼─────────────┼──────────────┼──────────────┼───────┘
         │              │             │              │              │
         ▼              ▼             ▼              ▼              ▼
 ┌──────────┐  ┌────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────┐
-│PostgreSQL │  │Cloudflare  │  │Google Gemini │  │ Google   │  │ NextAuth │
-│ (Supabase) │  │R2 (Files)  │  │API 2.5 Pro   │  │Imagen    │  │ Session  │
-│           │  │            │  │(Consultant)  │  │(Renders) │  │          │
+│PostgreSQL │  │Cloudflare  │  │Google Gemini │  │ Google   │  │  Redis   │
+│(local /  │  │R2 (Files)  │  │API 2.5 Pro   │  │Imagen    │  │ (cache)  │
+│ managed) │  │            │  │(Consultant)  │  │(Renders) │  │          │
 └──────────┘  └────────────┘  └──────────────┘  └──────────┘  └──────────┘
 ```
+
+**Local development:** All services run via `docker compose -f docker-compose.dev.yml up`. Postgres and Redis run as containers; frontend and backend are volume-mounted for hot reload.
 
 ---
 
 ## 2. Core Components
 
+### 2.0 The 2D Canvas (Primary Working Environment)
+
+The 2D floor plan editor (react-konva) is the **primary interface** — users do all their layout work here. The key insight is that floor plans are naturally read and edited in 2D; 3D rendering is the final output reward, not the working canvas.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  2D CANVAS ARCHITECTURE (react-konva)                               │
+│                                                                     │
+│  Data Model (Zustand):                                              │
+│  {                                                                  │
+│    walls: WallSegment[],         ← from admin template             │
+│    shapes: PlacedShape[],        ← furniture + fixtures            │
+│    roomLabels: RoomLabel[],      ← user-assigned room names        │
+│    history: CanvasSnapshot[],    ← undo/redo stack (100 steps)     │
+│  }                                                                  │
+│                                                                     │
+│  Layers (bottom → top):                                             │
+│  1. Grid layer (25cm grid, faint)                                   │
+│  2. Wall layer (WallSegment shapes; structural = hatched)           │
+│  3. Shape layer (placed furniture, doors, windows)                  │
+│  4. Label layer (room name overlays after demarking)               │
+│  5. Interaction layer (selection handles, resize grips, snapping)  │
+│                                                                     │
+│  Snap system:                                                       │
+│  • Grid snap: round to nearest 25cm on drop                        │
+│  • Wall snap: shapes within 20cm of a wall snap flush to it        │
+│  • Furniture-to-furniture: align edges when nearby                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
 ### 2.1 AI Design Consultant
 
-The most architecturally significant component. It is a **stateful, conversational agent** that maintains a **Design Brief JSON** across multi-turn exchanges.
+A **stateful, conversational agent** that receives the user's labelled room list as context and maintains a **Design Brief JSON** keyed by room label (not room type).
 
 ```
 User: "I want Japandi overall"
         │
         ▼
 ┌──────────────────────────────────────────┐
-│  API: POST /api/ai/consult                │
+│  POST /ai/consult                         │
 │  {                                        │
 │    projectId: "abc",                      │
 │    message: "I want Japandi overall",     │
 │    chatHistory: [...],                    │
-│    currentBrief: { rooms: {} }            │
+│    currentBrief: { rooms: {} },           │
+│    roomLabels: ["Master Bedroom",         │
+│      "Kitchen", "Living Room", ...]       │
 │  }                                        │
 └────────────────┬─────────────────────────┘
                  │
@@ -85,12 +119,12 @@ User: "I want Japandi overall"
 ┌──────────────────────────────────────────┐
 │  Gemini 2.5 Pro                           │
 │  System Prompt: Interior Design Consultant│
-│  Input: chat history + current brief       │
-│  Output: {                                 │
-│    response: "Great! Light oak or dark    │
-│              walnut for the floor?",      │
-│    updatedBrief: { overall_vibe, rooms }  │
-│  }                                        │
+│  Context: user's specific room labels    │
+│  Output: {                                │
+│    response: "Great! Light oak or dark   │
+│              walnut for the floor?",     │
+│    updatedBrief: { overall_vibe, rooms } │
+│  }                                       │
 └────────────────┬─────────────────────────┘
                  │
                  ▼
@@ -98,12 +132,12 @@ User: "I want Japandi overall"
 │  Response to client:                      │
 │  {                                        │
 │    message: "Great! Light oak...",        │
-│    briefDiff: { rooms.living.floor },     │
+│    briefDiff: { "Master Bedroom": {...} },│
 │    fullBrief: { ... }                     │
 │  }                                        │
 │                                           │
-│  Client: applies briefDiff to 3D viewport │
-│  (real-time material preview)             │
+│  Client: updates room summary panel       │
+│  (no 3D update — 3D is output only)       │
 └──────────────────────────────────────────┘
 ```
 
@@ -113,88 +147,88 @@ User: "I want Japandi overall"
 |----------|-----------|
 | **Server-side chat state** | Design brief saved to DB after each turn. User can refresh or come back later. |
 | **Streaming responses** | Use Gemini streaming for typing-effect in chat. Feels more conversational. |
-| **Brief diff → 3D preview** | When the AI updates the brief (e.g. "floor = light oak"), client immediately applies it to the 3D model. User sees changes in real-time. |
-| **No RAG** | The AI consultant doesn't need external knowledge — it's purely conversational + structured output. |
+| **Brief diff → room panel only** | AI updates the brief; the room summary panel updates. No 3D live preview — 3D is the final output. |
+| **Room labels as brief keys** | Brief is keyed by the user's chosen label ("Master Bedroom"), not a system room type. This means users can create any room names they want. |
+| **No RAG** | The AI consultant doesn't need external knowledge — purely conversational + structured output. |
 
 ### 2.2 Design Brief Data Model
 
-The Design Brief is the **single source of truth** for the entire project. It flows from the AI consultant → 3D material engine → Gemini render prompt.
+The Design Brief is the **single source of truth**. It flows from: AI consultant → Gemini render prompt. Keys are the user-assigned room labels.
 
 ```typescript
 interface DesignBrief {
-  overallVibe: string;           // "Japandi", "Industrial", etc.
-  rooms: Record<string, RoomBrief>;
+  overallVibe: string;                    // "Japandi", "Industrial", etc.
+  rooms: Record<string, RoomBrief>;       // keyed by user's room label
   createdAt: string;
   updatedAt: string;
 }
 
 interface RoomBrief {
-  roomType: string;              // "living", "kitchen", "mbr"
-  label: string;                 // "Living Room"
-  style: string;                 // "Japandi", "Vintage", ""
+  label: string;                 // User-assigned: "Master Bedroom", "Study", etc.
+  style: string;                 // "Japandi", "Vintage", "Industrial", ""
   description: string;           // Full natural language description
-  wallColor: string;             // hex color or material name
+  wallColor: string;             // hex or material name
   wallFinish: string;            // "matte", "satin", "textured"
   floorType: string;             // "parquet", "tiles", "laminate", "vinyl"
   floorColor: string;            // "light oak", "dark walnut", "white marble"
-  accentColor: string;           // hex or material name
+  accentColor: string;
   furnitureStyle: string;        // "minimal", "warm", "maximalist"
   lighting: string;              // "warm 2700K", "cool 4000K", "natural"
   specialNotes: string;          // "needs study corner", "play area for kids"
   renderPrompt: string;          // Auto-constructed from above fields
 }
 
-interface FurnitureTemplatePlacement {
-  templateId: string;
-  roomType: string;
-  roomLabel: string;
-  furniture: FurnitureItem[];
-  applied: boolean;              // User accepted or declined
+// The canvas state (separate from the brief)
+interface CanvasState {
+  walls: WallSegment[];
+  shapes: PlacedShape[];          // 2D furniture + fixtures placed by user
+  roomLabels: RoomLabel[];        // user-drawn area labels
+}
+
+interface PlacedShape {
+  id: string;
+  shapeType: string;              // "sofa-3seater", "bed-queen", "toilet", etc.
+  category: string;               // "bedroom" | "living" | "kitchen" | "bathroom"
+  x: number; y: number;           // canvas position (metres)
+  rotation: number;               // degrees
+  width: number; height: number;  // metres (may differ from default if resized)
+}
+
+interface RoomLabel {
+  id: string;
+  label: string;                  // "Master Bedroom"
+  areaPolygon: Point[];           // outline of the labelled area
+  centroid: Point;                // for label text placement
 }
 ```
 
-### 2.3 Furniture Template System with Drag-to-Place (LAVU-style)
+### 2.3 2D Shape Library & Drag-to-Place
 
-A hybrid approach: **AI picks the starting layout** (Option C templates), then the user can **drag, swap, rotate, and add furniture** freely — like LAVU's table management but in 3D.
+Users drag 2D top-down furniture shapes from the library sidebar onto the canvas. This is the primary way to populate rooms — no 3D interaction required.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  FURNITURE WORKFLOW                                                   │
+│  2D SHAPE LIBRARY WORKFLOW                                            │
 │                                                                       │
-│  Step 1: AI selects template                                         │
-│  ┌──────────────────────────────────────────────────────────┐        │
-│  │  "Japandi Living Room Set"                                │        │
-│  │  [Sofa] [Coffee Table] [Rug] [Floor Lamp] [TV Console]   │        │
-│  │                          [Apply] [Customize Instead ▼]    │        │
-│  └──────────────────────────────────────────────────────────┘        │
+│  Shape sidebar categories:                                            │
+│  • Walls & Doors  (wall segments, door arcs, windows)                │
+│  • Bedroom        (beds, wardrobes, dressers, study desks)           │
+│  • Living Room    (sofas, TV consoles, coffee tables, rugs)          │
+│  • Kitchen        (counters, appliances, island, stools)             │
+│  • Dining         (dining tables, chairs in sets)                    │
+│  • Bathroom       (toilet, sink, shower, bathtub)                    │
+│  • Others         (plants, lamps, misc)                              │
 │                                                                       │
-│  Step 2 (optional): Enter Tweak Mode                                  │
+│  Interaction:                                                         │
+│  1. Drag shape from sidebar → ghost appears at cursor                 │
+│  2. Drop onto canvas → snaps to nearest grid or wall                 │
+│  3. Select placed shape → resize handles, rotation handle            │
+│  4. Right-click → context menu: Rotate 90°, Flip, Remove, Duplicate  │
+│  5. Drag placed shape to reposition                                   │
 │                                                                       │
-│  ┌──────────────────────────────────────────────────────────┐        │
-│  │  3D Viewport:                                              │        │
-│  │                                                           │        │
-│  │      ┌────────────┐        ┌──────┐                      │        │
-│  │      │   🛋️ Sofa   │〰️〰️〰️〰️│ 💡   │ ← Drag handle    │        │
-│  │      │  dragging…  │        │ Lamp │                      │        │
-│  │      └────────────┘        └──────┘                      │        │
-│  │           ↕                                                │        │
-│  │      Wall snap: [15cm from wall ✅]                       │        │
-│  │      Collision: [None ✅]                                 │        │
-│  └──────────────────────────────────────────────────────────┘        │
-│                                                                       │
-│  Step 3: Swap or Add from Catalog                                     │
-│  ┌──────────────────────────────────────────────┐                    │
-│  │  🛋️ Furniture Catalog    │ 🔍 Search...      │                    │
-│  │──────────────────────────────────────────────│                    │
-│  │  Sofas      │ 🛋️ 3-Seater  │ 🛋️ Sectional   │                    │
-│  │  Tables     │ 🛋️ Loveseat  │ 🛋️ Chaise      │ ← Drag into room  │
-│  │  Lighting   │──────────────┴─────────────────│                    │
-│  │  Decor      │  🛋️ Currently: "Japandi Sofa"  │                    │
-│  │  Storage    │  [Swap] [Remove]               │                    │
-│  └──────────────────────────────────────────────┘                    │
-│                                                                       │
-│  Step 4: Save Layout                                                  │
-│  [Undo] [Redo] [Reset to Template] [Save as New Template]             │
+│  All furniture is represented as flat 2D top-down symbols            │
+│  (like draw.io / SmartDraw floor plan shapes).                       │
+│  The 2D layout is what gets passed to Gemini Imagen as context.      │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -248,160 +282,79 @@ interface FurnitureItem {
 
 ---
 
-### 2.4 Drag-to-Place Interaction System
-
-Inspired by LAVU's table management — furniture items become draggable 3D objects with smart snapping.
-
-#### Interaction Layer
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  DRAG-TO-PLACE ENGINE                                    │
-│                                                          │
-│  Input: Mouse/Pointer/Touch → Raycaster                  │
-│  ────────────────────────────────────────────────────────│
-│                                                          │
-│  ┌─────────────┐    ┌──────────────┐    ┌────────────┐  │
-│  │  Pick &     │    │  Snap        │    │  Collision │  │
-│  │  Drag       │───►│  System      │───►│  Detection │  │
-│  │             │    │              │    │            │  │
-│  │ Raycast to  │    │ Grid (25cm)  │    │ AABB check │  │
-│  │ groundplane │    │ Wall (15cm)  │    │ vs all     │  │
-│  │ Z-buffer    │    │ Furniture    │    │ other items│  │
-│  │ depth       │    │ (align edges)│    │            │  │
-│  └─────────────┘    └──────────────┘    └────────────┘  │
-│                           │                   │         │
-│                           ▼                   ▼         │
-│                    ┌──────────────┐    ┌────────────┐  │
-│                    │  Visual      │    │  Reject    │  │
-│                    │  Feedback    │    │  Position  │  │
-│                    │              │    │            │  │
-│                    │ Green ghost  │    │ Red tint + │  │
-│                    │ snap preview │    │ push-back  │  │
-│                    └──────────────┘    └────────────┘  │
-└─────────────────────────────────────────────────────────┘
-```
-
-#### Snap Rules
+### 2.4 2D Canvas Snap System
 
 | Rule | Implementation | Visual Feedback |
 |------|---------------|-----------------|
-| **Grid snap** | Round position to nearest 25cm on X/Z | Thin grid lines visible in tweak mode |
-| **Wall snap** | If within 20cm of a wall, snap to 15cm gap | Wall glows + ghost shows snapped position |
-| **Furniture-to-furniture** | Align edges of adjacent items (e.g. coffee table to sofa) | Matching edge highlights |
-| **Rotation snap** | 45° increments; hold Shift for free rotation | Rotate ring with tick marks |
-| **Floor constraint** | Y always = 0 (no floating furniture) | Ghost always projected to floor |
-
-#### Swap & Catalog Interaction
-
-```
-User taps/right-clicks furniture item
-        │
-        ▼
-┌────────────────────────────────────┐
-│  Context Menu                      │
-│  ───────────────────────────────── │
-│  🖱️ Drag to Move                   │
-│  🔄 Rotate                         │
-│  🔄 Swap Item...                   │
-│  ❌ Remove                         │
-│  📋 Copy to Clipboard              │
-└────────────────────────────────────┘
-        │
-        ▼  "Swap Item"
-┌────────────────────────────────────┐
-│  Furniture Catalog (Sheet Panel)    │
-│  ───────────────────────────────── │
-│  Current: "3-Seater Sofa"         │
-│                                    │
-│  [🛋️ Sectional Sofa] [🛋️ Loveseat]│
-│  [🛋️ Chaise Lounge]  [🛋️ Sleeper] │
-│                                    │
-│  Category: [Seating ▼]            │
-│  Style filter: [Japandi ▼]        │
-└────────────────────────────────────┘
-        │
-        ▼  Pick replacement
-Replace in same position + rotation
-Old item returns to catalog
-```
+| **Grid snap** | Round to nearest 25cm on drop | Faint grid visible while dragging |
+| **Wall snap** | Within 20cm of a wall → snap flush against it | Wall highlights; ghost shows snapped position |
+| **Furniture-to-furniture** | Align edges of adjacent shapes (sofa back to wall) | Edge highlight on both shapes |
+| **Rotation snap** | 45° increments; hold Shift for free rotation | Rotation handle with tick marks |
 
 #### Technology
 
 | Need | Solution |
 |------|----------|
-| **Drag in 3D** | `@react-three/drei` `DragControls` — built-in, works with R3F |
-| **Ground plane raycast** | Three.js `Raycaster` against invisible floor plane |
-| **Bounding box collision** | Three.js `Box3` — cheap AABB overlap checks per frame during drag |
-| **Snap-to-grid** | `Math.round(pos / gridSize) * gridSize` on drag release |
-| **Wall snap** | Pre-calculate wall edge positions from room vertices; distance check |
-| **Ghost preview** | Clone mesh with `opacity: 0.4`, `depthWrite: false` |
-### 2.5 Render Pipeline (3-Tier)
+| **Canvas rendering** | `react-konva` — 2D shapes, event handling, layers |
+| **Drag & drop** | Konva `Transformer` + `draggable` props on shapes |
+| **Snap-to-grid** | `Math.round(pos / gridSize) * gridSize` on `dragend` |
+| **Wall snap** | Check distance to all wall segments on `dragend`; snap if < 20cm |
+| **Collision** | Bounding rect overlap check; prevent drop if overlapping structural element |
+| **Ghost on drag** | Konva shape with `opacity: 0.4` following cursor |
+| **Undo/redo** | Zustand snapshot stack (100 steps); serialize full canvas state |
+
+### 2.5 Render Pipeline (2-Tier)
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  TIER 1: PREVIEW (Free, instant)                                 │
+│  TIER 1: SAMPLE (Low cost, ~$0.04)                                │
 │  ─────────────────────────────────────                           │
-│  → The 3D viewport with PBR materials                            │
-│  → No Gemini API call needed                                     │
-│  → User sees material/colour changes in real-time                │
-│  → Screenshot quality — good enough to judge layout               │
+│  → User picks one room label to test                              │
+│  → Backend: export canvas region for that room → PNG             │
+│  → Build render prompt from DesignBrief[roomLabel]               │
+│  → Gemini Imagen: canvas PNG + text prompt → photorealistic image │
+│  → User reviews: "Does this match your vision?"                  │
+│  → Can tweak prompt and regenerate before committing             │
 │                                                                   │
-│  TIER 2: SAMPLE (Low cost, ~$0.04)                                │
+│  TIER 2: FINAL RENDER (Full cost, ~$0.30-0.50)                   │
 │  ─────────────────────────────────────                           │
-│  → 1 room (Living Room by default) → Gemini Imagen               │
-│  → User judges: "Do I like how the AI interprets my style?"      │
-│  → Can regenerate with tweaked prompts                           │
-│  → Quality gate before committing to full batch                   │
-│                                                                   │
-│  TIER 3: FINAL RENDER (Full cost, ~$0.30-0.50)                   │
-│  ─────────────────────────────────────                           │
-│  → All rooms, selected angles per room                            │
-│  → Triggered only when user says "Finalize"                       │
-│  → Progress: "Rendering Room 3 of 8..."                           │
-│  → Each render uses DesignBrief per-room + camera angle           │
+│  → All labelled rooms rendered sequentially                       │
+│  → Triggered only after sample is approved                        │
+│  → Progress: "Rendering Room 3 of 6..."                           │
+│  → Each render: canvas region crop + DesignBrief[roomLabel]       │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-#### Sample Render Flow
+#### Render Flow
 
 ```
 User clicks [Generate Sample]
         │
-        ▼
-┌──────────────────────────────────────────────┐
-│  Pick room to sample:                        │
-│  ● Living Room (recommended)                 │
-│  ○ Master Bedroom                            │
-│  ○ Kitchen                                   │
-│                                              │
-│  [Generate Sample (~$0.04)]   [Cancel]       │
-└──────────────────────────────────────────────┘
+        ▼ Pick room label to sample
+POST /render/sample
+{ projectId, roomLabel: "Living Room" }
         │
         ▼
-POST /api/render/sample
-{ projectId, roomType: "living", resolution: "1024x1024" }
+Backend:
+  1. Fetch project canvas state from DB
+  2. Crop canvas region to room polygon (from RoomLabel.areaPolygon)
+  3. Export cropped region as PNG (node-canvas or sharp)
+  4. Build render prompt from DesignBrief["Living Room"]
+  5. Call Gemini Imagen: { image: PNG, prompt }
+  6. Save result to R2
+  7. Return render URL
         │
         ▼
-┌──────────────────────────────────────────────┐
-│  Sample Render — Living Room                  │
-│  ┌──────────────────────────────────────┐    │
-│  │                                      │    │
-│  │  [AI-generated image]               │    │
-│  │                                      │    │
-│  └──────────────────────────────────────┘    │
-│                                              │
-│  "Does this match your vision?"              │
-│                                              │
-│  [Looks Great! → Final Render 🚀]            │
-│  [Tweak Prompt 🔄]                           │
-│                                              │
-│  ┌─ Tweak ───────────────────────────┐      │
-│  │ "Make it warmer, more plants,     │      │
-│  │  and change sofa to beige"        │      │
-│  └───────────────────────────────────┘      │
-└──────────────────────────────────────────────┘
-```
+[Sample image] → User approves → [Render All Rooms]
+        │
+POST /render/final
+{ projectId }
+        │
+Sequential per room label:
+  Repeat steps 1-6 for each labelled room
+  Emit progress via SSE: { room, done, total }
+        │
+Gallery populates as each render completes
 
 #### Final Render Flow
 
@@ -484,80 +437,73 @@ interface CustomAngle {
 
 | Decision | Choice | Alternative Considered | Why Chosen |
 |----------|--------|----------------------|------------|
-| AI Consultant state | Server-side (DB) | Client-only in-memory | User can refresh/return; shared history |
-| Design Brief source | AI consultant output | User fills form directly | Conversational is faster, more creative |
-| Furniture system | Curated templates | AI-generated layout | Reliable, controllable, faster MVP |
-| Render engine | Gemini Imagen (img2img) | Stable Diffusion + ControlNet | Gemini has native image conditioning; simpler API |
-| 3D geometry | Client-side wall-segment mesh (wall-as-box) | Server-side Python (trimesh) | No backend needed; supports wall editing |
-| Chat protocol | Streaming SSE | WebSocket | Simpler infrastructure; Vercel-compatible |
-| BTO data model | Admin-curated | Scrape HDB website | Reliable, curated quality; no stale data |
+| **Primary canvas** | 2D floor plan editor (react-konva) | 3D viewport as working environment | Users think in 2D; lower learning curve; faster on any device |
+| **3D role** | Final rendered output only (Gemini Imagen) | Interactive 3D working viewport | Removes WebGL dependency from core flow; 3D is the reward, not the tool |
+| **Furniture in editor** | 2D top-down shapes | 3D furniture drag-and-drop | Simpler, faster, works on mobile; consistent with 2D floor plan metaphor |
+| **Room labelling** | User-driven after editing | Admin pre-labelled rooms | Users know their own layout intent; supports any room name |
+| **Design Brief keys** | User-assigned room labels | Fixed system room types | Flexible — supports "Study nook", custom room names |
+| **AI Consultant state** | Server-side (DB) | Client-only in-memory | User can refresh/return; shared history |
+| **Render input** | 2D canvas crop + text prompt | 3D viewport screenshot | No Three.js/WebGL needed for renders; canvas export is straightforward |
+| **Render engine** | Gemini Imagen (img2img) | Stable Diffusion + ControlNet | Native image conditioning; simpler API |
+| **Chat protocol** | Streaming SSE | WebSocket | Simpler infra; works over standard HTTP |
+| **BTO data model** | Admin-curated wall segments | Scrape HDB website | Reliable quality; no stale/broken data |
 
 ---
 
 ## 4. API Routes
 
+All routes are Express handlers on the backend (`localhost:4000`). The frontend calls them via TanStack Query.
+
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/auth/[...nextauth]` | * | NextAuth handlers |
-| `/api/bto` | GET | List published BTO projects |
-| `/api/bto` | POST | Create BTO project (admin) |
-| `/api/bto/[id]` | GET/PUT/DELETE | Single BTO project CRUD |
-| `/api/bto/[id]/models` | GET | List flat models for a BTO project |
-| `/api/bto/[id]/models` | POST | Create flat model (admin) |
-| `/api/models/[id]` | GET | Flat model with room configs |
-| `/api/models/[id]/rooms` | PUT | Update room configs (admin) |
-| `/api/projects` | POST | Create new user project |
-| `/api/projects/[id]` | GET/PUT | Get/update project |
-| `/api/projects/[id]/brief` | PUT | Update design brief |
-| `/api/projects/[id]/chat` | * | Chat history CRUD |
-| `/api/ai/consult` | POST | Send msg to AI consultant |
-| `/api/ai/consult/stream` | GET | SSE stream for typing effect |
-| `/api/render` | POST | Trigger Gemini render for a room |
-| `/api/render/[id]` | GET | Get render result |
-| `/api/export` | POST | Generate Collada/OBJ download URL |
-| `/api/import` | POST | Re-upload and parse .dae/.obj |
-| `/api/upload` | POST | Upload file to R2 (signed URL) |
-| `/api/furniture/templates` | GET | List furniture templates |
-| `/api/furniture/apply` | POST | Apply furniture template to project |
+| `/auth/google` | GET | Initiate Google OAuth flow |
+| `/auth/google/callback` | GET | OAuth callback → issue JWT |
+| `/auth/me` | GET | Verify JWT, return user |
+| `/bto` | GET | List published BTO projects |
+| `/bto` | POST | Create BTO project (admin) |
+| `/bto/:id` | GET/PUT/DELETE | Single BTO project CRUD |
+| `/bto/:id/models` | GET | List flat models for a BTO project |
+| `/bto/:id/models` | POST | Create flat model (admin) |
+| `/models/:id` | GET | Flat model with wall segments + rooms |
+| `/models/:id/rooms` | PUT | Update room configs (admin) |
+| `/projects` | POST | Create new user project |
+| `/projects/:id` | GET/PUT | Get/update project |
+| `/projects/:id/canvas` | GET/PUT | Get/save full canvas state (walls + shapes) |
+| `/projects/:id/labels` | GET/PUT | Get/save room label assignments |
+| `/projects/:id/brief` | PUT | Update design brief |
+| `/projects/:id/chat` | GET/DELETE | Chat history |
+| `/ai/consult` | POST | Send message to AI consultant |
+| `/ai/consult/stream` | GET | SSE stream for typing effect |
+| `/render/sample` | POST | Generate sample render for one room label |
+| `/render/final` | POST | Batch render all labelled rooms |
+| `/render/:id` | GET | Get render result |
+| `/upload` | POST | R2 signed URL for direct upload |
+| `/shapes` | GET | List available 2D shape definitions |
 
 ---
 
 ## 5. Component Tree
 
 ```
-app/
-├── (public)/
-│   ├── page.tsx                     # Landing page
-│   ├── browse/page.tsx              # BTO project browser
-│   ├── browse/[slug]/page.tsx       # BTO + flat model selector
-│   └── share/[id]/page.tsx          # Public render gallery
+src/
+├── main.tsx                         # React entry point
+├── App.tsx                          # Router setup
 │
-├── (auth)/
-│   └── login/page.tsx               # Google OAuth login
-│
-├── (dashboard)/
-│   ├── layout.tsx                   # Auth-protected layout
-│   ├── page.tsx                     # User's project list
-│   └── project/
-│       └── [id]/
-│           ├── page.tsx             # Main studio page (viewport + chat + gallery)
-│           └── export/page.tsx      # Export/import page
-│
-├── admin/
-│   ├── login/page.tsx               # Admin login
-│   ├── layout.tsx                   # Protected admin layout
-│   ├── page.tsx                     # Dashboard
-│   ├── bto/
-│   │   ├── page.tsx                 # BTO project list
-│   │   ├── new/page.tsx             # New BTO project form
-│   │   └── [id]/
-│   │       ├── edit/page.tsx         # Edit BTO project details
-│   │       └── models/
-│   │           ├── new/page.tsx      # New flat model
-│   │           └── [modelId]/
-│   │               └── annotate/page.tsx  # Room annotation canvas
-│   └── furniture/
-│       └── page.tsx                 # Furniture template manager
+├── pages/
+│   ├── LandingPage.tsx              # Public landing
+│   ├── BrowsePage.tsx               # BTO project browser
+│   ├── BTODetailPage.tsx            # BTO + flat model selector
+│   ├── LoginPage.tsx                # Google OAuth login
+│   ├── DashboardPage.tsx            # User's project list
+│   ├── StudioPage.tsx               # Main studio (viewport + chat + gallery)
+│   ├── ExportPage.tsx               # Export/import page
+│   ├── SharePage.tsx                # Public render gallery (no login)
+│   └── admin/
+│       ├── AdminDashboardPage.tsx
+│       ├── BTOListPage.tsx
+│       ├── BTOEditPage.tsx
+│       ├── FlatModelAnnotatePage.tsx # Room annotation canvas
+│       └── FurnitureTemplatePage.tsx
 
 components/
 ├── ui/                              # shadcn/ui components
@@ -574,61 +520,42 @@ components/
 │   ├── BTOProjectCard.tsx
 │   ├── FlatModelSelector.tsx
 │   └── FloorPlanPreview.tsx
-├── flooreditor/                       # Floor plan editor (user-facing)
-│   ├── FloorPlanEditor.tsx            # Main editor layout
-│   ├── FloorPlanCanvas.tsx            # react-konva canvas
-│   ├── SelectMode.tsx                 # Wall selection tool
-│   ├── DrawMode.tsx                   # Wall drawing tool
-│   ├── DeleteWallDialog.tsx           # Merge confirmation
-│   ├── RoomLabelEditor.tsx            # Name rooms after merge/split
-│   ├── StructuralWallOverlay.tsx      # Load-bearing highlights
-│   ├── LivePreview3D.tsx              # Side panel 3D preview
-│   ├── FloorPlanToolbar.tsx           # Toolbar (modes, undo/redo)
-│   └── FloorPlanHistory.tsx           # Undo/redo state
-├── viewport/                          # 3D viewport
-│   ├── Studio.tsx                   # Main studio layout (viewport + panels)
-│   ├── Scene.tsx                    # R3F Canvas
-│   ├── Building.tsx                 # Flat 3D model
-│   ├── Room.tsx                     # Single room mesh
-│   ├── Doors.tsx                    # Door geometries
-│   ├── Windows.tsx                  # Window geometries
-│   ├── Flooring.tsx                 # Per-room floor material
-│   ├── Furniture.tsx                # Placed furniture objects
-│   ├── RoomLabels.tsx               # 3D room name labels
-│   ├── Controls.tsx                 # Orbit, walkthrough
-│   └── CameraPresets.tsx            # Per-room camera positions
-├── consultant/                      # AI design consultant
-│   ├── ChatPanel.tsx                # Chat interface
-│   ├── ChatMessage.tsx              # Single message bubble
-│   ├── ChatInput.tsx                # Text input + send
-│   ├── StylePreview.tsx             # Real-time material preview
-│   ├── DesignSummary.tsx            # Current brief summary
-│   └── RoomTabBar.tsx               # Switch between rooms in chat
-├── furniture/                       # Furniture system
-│   ├── FurnitureSelector.tsx        # Template picker
-│   ├── FurnitureTemplateCard.tsx
-│   ├── FurnitureItemList.tsx        # Items in selected template
-│   └── PlacementToggle.tsx          # Accept/reject individual items
-├── export/
-│   ├── ExportPanel.tsx
-│   ├── ExportButton.tsx
-│   ├── ImportDropzone.tsx
-│   └── FormatSelector.tsx
-├── renders/                         # AI render gallery
-│   ├── RenderGallery.tsx
+├── editor/                            # 2D floor plan editor (PRIMARY)
+│   ├── FloorPlanEditor.tsx            # Main editor layout (sidebar + canvas)
+│   ├── FloorPlanCanvas.tsx            # react-konva canvas — walls, shapes, labels
+│   ├── ShapeLibrarySidebar.tsx        # Categorised shape drag source
+│   ├── ShapeLibraryCategory.tsx       # Expandable category (Bedroom, Living, etc.)
+│   ├── PlacedShape.tsx                # Individual draggable shape on canvas
+│   ├── WallLayer.tsx                  # Wall segment rendering + selection
+│   ├── StructuralWallMarker.tsx       # Hatched overlay for structural walls
+│   ├── GridLayer.tsx                  # Background grid (25cm)
+│   ├── EditorToolbar.tsx              # Undo/redo/reset/zoom controls
+│   └── EditorPropertiesPanel.tsx      # Context panel (selected shape/wall)
+├── demarking/                         # Room labelling (step after editor)
+│   ├── RoomDemarcation.tsx            # Main labelling screen
+│   ├── AreaHighlight.tsx              # Unlabelled area pulse overlay
+│   └── LabelPicker.tsx                # Quick-select chips + free text input
+├── consultant/                        # AI design consultant
+│   ├── ChatPanel.tsx                  # Chat interface + room summary sidebar
+│   ├── ChatMessage.tsx                # Single message bubble
+│   ├── ChatInput.tsx                  # Text input + send
+│   ├── RoomBriefSummary.tsx           # Per-room brief status panel
+│   └── ModeToggle.tsx                 # "Overall vibe" vs "Room by room" toggle
+├── renders/                           # AI render gallery
+│   ├── RenderScreen.tsx               # Sample → approve → final batch
+│   ├── SampleRender.tsx               # Room picker + generated image + tweak
+│   ├── RenderProgress.tsx             # Batch progress bar + per-room checklist
+│   ├── RenderGallery.tsx              # Tab by room label + image grid
 │   ├── RenderCard.tsx
-│   ├── RenderButton.tsx
-│   ├── RenderLightbox.tsx
 │   ├── BeforeAfterSlider.tsx
-│   └── RoomRenderSelector.tsx       # Which room to render
-└── admin/                           # Admin components
+│   └── RenderLightbox.tsx
+└── admin/                             # Admin components
     ├── BTOProjectForm.tsx
     ├── FlatModelForm.tsx
-    ├── WallAnnotationCanvas.tsx
+    ├── WallAnnotationCanvas.tsx        # Admin wall-drawing tool (react-konva)
     ├── WallPropertyPanel.tsx
     ├── RoomPropertyPanel.tsx
     ├── DoorWindowPlacement.tsx
-    ├── FurnitureTemplateForm.tsx
     └── AdminDashboard.tsx
 ```
 
