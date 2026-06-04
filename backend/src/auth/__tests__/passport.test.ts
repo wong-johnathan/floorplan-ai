@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, afterAll } from 'vitest';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { upsertGoogleUser } from '../passport';
@@ -8,6 +8,10 @@ const prisma = new PrismaClient({ adapter });
 
 afterEach(async () => {
   await prisma.user.deleteMany({ where: { googleId: 'g-test-upsert' } });
+});
+
+afterAll(async () => {
+  await prisma.$disconnect();
 });
 
 describe('upsertGoogleUser', () => {
