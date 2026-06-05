@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { useAnnotationStore } from '../../stores/adminAnnotationStore';
 
 const ROOM_CHIPS: { label: string; roomType: string }[] = [
@@ -24,7 +24,6 @@ export function RoomLabelPopup({ roomId, screenX, screenY, onClose }: Props) {
   const rooms = useAnnotationStore(s => s.rooms);
   const updateRoom = useAnnotationStore(s => s.updateRoom);
   const [customName, setCustomName] = useState('');
-  const popupRef = useRef<HTMLDivElement>(null);
 
   const room = rooms.find(r => r.id === roomId);
   if (!room) return null;
@@ -44,13 +43,12 @@ export function RoomLabelPopup({ roomId, screenX, screenY, onClose }: Props) {
   // Clamp position to viewport
   const popupWidth = 260;
   const popupHeight = 160;
-  const clampedX = Math.min(screenX, window.innerWidth - popupWidth - 8);
+  const clampedX = Math.max(8, Math.min(screenX, window.innerWidth - popupWidth - 8));
   const clampedY = Math.min(screenY - popupHeight - 8, window.innerHeight - popupHeight - 8);
   const finalY = clampedY < 8 ? screenY + 8 : clampedY;
 
   return (
     <div
-      ref={popupRef}
       className="absolute z-30 bg-white border border-zinc-200 rounded-lg shadow-xl p-3"
       style={{ left: clampedX, top: finalY, width: popupWidth }}
       onMouseDown={e => e.stopPropagation()}
