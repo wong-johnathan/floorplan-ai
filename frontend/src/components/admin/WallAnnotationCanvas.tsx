@@ -28,7 +28,6 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [snapTarget, setSnapTarget] = useState<{ x: number; y: number } | null>(null);
-  const [spaceHeld, setSpaceHeld] = useState(false);
   const [activelyPanning, setActivelyPanning] = useState(false);
   const [hoveredFurn, setHoveredFurn] = useState<string | null>(null);
 
@@ -44,6 +43,8 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
   const orthoSnap = useAnnotationStore(s => s.orthoSnap);
   const endpointSnap = useAnnotationStore(s => s.endpointSnap);
   const showBackground = useAnnotationStore(s => s.showBackground);
+  const showFurniture = useAnnotationStore(s => s.showFurniture);
+  const showFurnitureLabels = useAnnotationStore(s => s.showFurnitureLabels);
   const wallOpacity = useAnnotationStore(s => s.wallOpacity);
   const furniture = useAnnotationStore(s => s.furniture);
   const selectedFurnitureId = useAnnotationStore(s => s.selectedFurnitureId);
@@ -183,7 +184,6 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
   useEffect(() => {
     function down(e: KeyboardEvent) {
       if (e.key === 'Shift') setOrtho(true);
-      if (e.key === ' ') { e.preventDefault(); setSpaceHeld(true); }
       if (!e.metaKey && !e.ctrlKey && document.activeElement === document.body) {
         if (e.key === 'w') setTool('draw-wall');
         if (e.key === 's') setTool('select');
@@ -196,7 +196,6 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
     }
     function up(e: KeyboardEvent) {
       if (e.key === 'Shift') setOrtho(false);
-      if (e.key === ' ') setSpaceHeld(false);
     }
     window.addEventListener('keydown', down); window.addEventListener('keyup', up);
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
@@ -217,7 +216,7 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
 
   // Pan state
   const panStartRef = useRef({ x: 0, y: 0, active: false });
-  const isPanning = tool === 'pan' || spaceHeld;
+  const isPanning = tool === 'pan';
 
   // Drawing tools
   const handleMouseDown = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
@@ -338,6 +337,28 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
     }
     segs.push({ x1: w.startX + dx * t, y1: w.startY + dy * t, x2: w.endX, y2: w.endY });
     return segs;
+  }
+
+  function labelCoords(f: typeof furniture[0], lw: number) {
+    const gap = 4;
+    const hw = toScreen(f.width) / 2, hh = toScreen(f.height) / 2;
+    const cx = toScreen(f.x), cy = toScreen(f.y);
+    const pos = f.labelPosition ?? 'center';
+    switch (pos) {
+      // Corner positions — label extends outward from the edge
+      case 'top-right':     return { lx: cx + hw + gap,      ly: cy - hh - 18 - gap };
+      case 'top-left':      return { lx: cx - hw - lw - gap, ly: cy - hh - 18 - gap };
+      case 'bottom-right':  return { lx: cx + hw + gap,      ly: cy + hh + gap };
+      case 'bottom-left':   return { lx: cx - hw - lw - gap, ly: cy + hh + gap };
+      // Edge-center positions
+      case 'top-center':    return { lx: cx - lw / 2,        ly: cy - hh - 18 - gap };
+      case 'bottom-center': return { lx: cx - lw / 2,        ly: cy + hh + gap };
+      case 'middle-right':  return { lx: cx + hw + gap,      ly: cy - 9 };
+      case 'middle-left':   return { lx: cx - hw - lw - gap, ly: cy - 9 };
+      // Center position — inside the shape
+      case 'center':        return { lx: cx - lw / 2,        ly: cy - 9 };
+      default:              return { lx: cx + hw + gap,      ly: cy - hh - 18 - gap };
+    }
   }
 
   function wallColor(w: typeof walls[0]) {
@@ -523,7 +544,7 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
         </Group>
 
         {/* Furniture — custom-drawn outlines */}
-        {furniture.map(f => {
+        {showFurniture && furniture.map(f => {
           const sx = toScreen(f.x), sy = toScreen(f.y);
           const sw = toScreen(f.width), sh = toScreen(f.height);
           const renderer = FurnitureOutlines[f.itemType];
@@ -577,50 +598,84 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
           rotateAnchorOffset={16}
           boundBoxFunc={(oldBox, newBox) => (newBox.width < 10 || newBox.height < 10 ? oldBox : newBox)} />
 
-        {/* Hover label */}
-        {hoveredFurn && (() => {
-          const hf = furniture.find(f => f.id === hoveredFurn);
-          if (!hf) return null;
-          const def = FURNITURE_CATALOG.find(d => d.type === hf.itemType);
-          return (
-            <Text x={toScreen(hf.x) + toScreen(hf.width) / 2 + 6}
-              y={toScreen(hf.y) - toScreen(hf.height) / 2 - 16}
-              text={def?.label ?? hf.itemType}
-              fontSize={11} fontFamily="sans-serif"
-              fill="#333" padding={4}
-              fillAfterStrokeEnabled
-              stroke="white" strokeWidth={2}
-              listening={false} />
-          );
-        })()}
+        {/* Furniture labels — always visible when toggled, hover-only otherwise */}
+        {showFurnitureLabels
+          ? furniture.map(f => {
+              const def = FURNITURE_CATALOG.find(d => d.type === f.itemType);
+              const label = f.label || def?.label || f.itemType;
+              const lw = label.length * 7 + 16;
+              const { lx, ly } = labelCoords(f, lw);
+              return (
+                <Group key={`label-${f.id}`} x={lx} y={ly} listening={false}>
+                  <Rect x={0} y={0} width={lw} height={18}
+                    fill="rgba(255,255,255,0.5)" cornerRadius={3}
+                    stroke="rgba(0,0,0,0.1)" strokeWidth={0.5} />
+                  <Text x={0} y={0} width={lw} height={18}
+                    text={label} fontSize={11} fontFamily="sans-serif"
+                    fill="#333" align="center" verticalAlign="middle"
+                    listening={false} />
+                </Group>
+              );
+            })
+          : hoveredFurn && (() => {
+              const hf = furniture.find(f => f.id === hoveredFurn);
+              if (!hf) return null;
+              const def = FURNITURE_CATALOG.find(d => d.type === hf.itemType);
+              const label = hf.label || def?.label || hf.itemType;
+              const lw = label.length * 7 + 16;
+              const { lx, ly } = labelCoords(hf, lw);
+              return (
+                <Group key="hover-label" x={lx} y={ly} listening={false}>
+                  <Rect x={0} y={0} width={lw} height={18}
+                    fill="rgba(255,255,255,0.5)" cornerRadius={3}
+                    stroke="rgba(0,0,0,0.1)" strokeWidth={0.5} />
+                  <Text x={0} y={0} width={lw} height={18}
+                    text={label} fontSize={11} fontFamily="sans-serif"
+                    fill="#333" align="center" verticalAlign="middle"
+                    listening={false} />
+                </Group>
+              );
+            })()
+        }
 
 
-        {/* Endpoint handles for selected wall */}
-        {(() => {
-          const selWall = walls.find(w => w.id === selectedWallId);
-          if (!selWall) return null;
-          return (
-            <>
-              <Circle x={toScreen(selWall.startX)} y={toScreen(selWall.startY)} radius={6}
-                fill="white" stroke="#2563EB" strokeWidth={2}
-                draggable onDragMove={(e) => {
-                  const p = snapToGrid({ x: toMetres(e.target.x()), y: toMetres(e.target.y()) });
-                  const snapped = endpointSnap(p);
-                  const otherEnd = { x: selWall.endX, y: selWall.endY };
-                  if (Math.abs(snapped.x - otherEnd.x) < 0.02 && Math.abs(snapped.y - otherEnd.y) < 0.02) return;
-                  useAnnotationStore.getState().updateWall(selWall.id!, { startX: p.x, startY: p.y });
-                }} />
-              <Circle x={toScreen(selWall.endX)} y={toScreen(selWall.endY)} radius={6}
-                fill="white" stroke="#2563EB" strokeWidth={2}
-                draggable onDragMove={(e) => {
-                  const p = snapToGrid({ x: toMetres(e.target.x()), y: toMetres(e.target.y()) });
-                  const snapped = endpointSnap(p);
-                  const otherEnd = { x: selWall.startX, y: selWall.startY };
-                  if (Math.abs(snapped.x - otherEnd.x) < 0.02 && Math.abs(snapped.y - otherEnd.y) < 0.02) return;
-                  useAnnotationStore.getState().updateWall(selWall.id!, { endX: p.x, endY: p.y });
-                }} />
-            </>
-          );
+        {/* Mode A — Endpoint handles for selected wall */}
+        {selectedWallId && (() => {
+          const wall = walls.find(w => w.id === selectedWallId);
+          if (!wall) return null;
+          const pts: Array<{ key: 'start' | 'end'; mx: number; my: number }> = [
+            { key: 'start', mx: wall.startX, my: wall.startY },
+            { key: 'end',   mx: wall.endX,   my: wall.endY   },
+          ];
+          return pts.map(({ key, mx, my }) => (
+            <Circle
+              key={`ep-${wall.id}-${key}`}
+              x={toScreen(mx)}
+              y={toScreen(my)}
+              radius={7 / zoom}
+              fill="white"
+              stroke={wall.isLoadBearing || wall.wallType === 'external' ? '#ef4444' : '#6382ff'}
+              strokeWidth={2 / zoom}
+              draggable={!wall.isLoadBearing && wall.wallType !== 'external'}
+              onDragEnd={e => {
+                const rawX = toMetres(e.target.x());
+                const rawY = toMetres(e.target.y());
+                const snapped = snapToGrid({ x: rawX, y: rawY });
+                const finalSnapped = endpointSnap(snapped);
+                if (key === 'start') {
+                  useAnnotationStore.getState().updateWall(wall.id!, { startX: finalSnapped.x, startY: finalSnapped.y });
+                } else {
+                  useAnnotationStore.getState().updateWall(wall.id!, { endX: finalSnapped.x, endY: finalSnapped.y });
+                }
+                e.target.position({ x: toScreen(finalSnapped.x), y: toScreen(finalSnapped.y) });
+              }}
+              onDragStart={e => {
+                if (wall.isLoadBearing || wall.wallType === 'external') {
+                  e.target.stopDrag();
+                }
+              }}
+            />
+          ));
         })()}
 
         {/* Room labels */}
