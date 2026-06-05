@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { WallSegment, RoomDef, PlacedFurniture } from '../types/admin';
-import { detectRooms } from '../lib/geometry/roomDetection';
+import { detectRooms, splitWalls } from '../lib/geometry/roomDetection';
 
 export type ToolMode = 'select' | 'draw-wall' | 'add-door' | 'add-window' | 'divider' | 'pan' | 'place-furniture';
 export type GridSize = 25 | 50 | 100; // cm
@@ -23,6 +23,8 @@ interface AnnotationState {
   wallSnap: boolean;
   snapDistance: number; // Wall snap distance in metres
   showBackground: boolean;
+  showFurniture: boolean;
+  showFurnitureLabels: boolean;
   wallOpacity: number;  // 0.2–1.0
   orthoLock: boolean;
   drawStart: Point | null;
@@ -54,6 +56,7 @@ interface AnnotationState {
   addFurniture: (item: PlacedFurniture) => void;
   updateFurniture: (id: string, updates: Partial<PlacedFurniture>) => void;
   removeFurniture: (id: string) => void;
+  duplicateFurniture: (id: string) => void;
   selectFurniture: (id: string | null) => void;
   setPlacingFurnitureType: (type: string | null) => void;
   loadAnnotation: (walls: WallSegment[], rooms: RoomDef[], furniture?: PlacedFurniture[]) => void;
@@ -96,6 +99,8 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   wallSnap: true,
   snapDistance: 0.08, // ~8px at 100px/m
   showBackground: true,
+  showFurniture: true,
+  showFurnitureLabels: false,
   wallOpacity: 0.8,
   orthoLock: false,
   drawStart: null,
@@ -146,20 +151,87 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   detectAndSetRooms: () => {
     const { walls } = get();
     if (walls.length < 3) return;
-    const allWalls = walls.map(w => ({ startX: w.startX, startY: w.startY, endX: w.endX, endY: w.endY }));
-    const polygons = detectRooms(allWalls);
-    const TOL = 0.02; // tolerance for wall-on-polygon check
+
+    const allWallInputs = walls.map(w => ({
+      startX: w.startX, startY: w.startY, endX: w.endX, endY: w.endY,
+    }));
+
+    // Split walls at T-junctions/X-crossings; persist the result
+    const splitInputs = splitWalls(allWallInputs);
+
+    // Build a mapping: for each split segment, find its parent wall (by checking
+    // which original wall contains the segment's start point)
+    const buildSplitWalls = (): WallSegment[] => {
+      return splitInputs.map(seg => {
+        // Find the original wall this segment came from
+        const parent = walls.find(w => {
+          const dx = w.endX - w.startX;
+          const dy = w.endY - w.startY;
+          const len2 = dx * dx + dy * dy;
+          if (len2 < 1e-10) return false;
+          // Check seg.start and seg.end lie on this wall
+          const tStart = ((seg.startX - w.startX) * dx + (seg.startY - w.startY) * dy) / len2;
+          const tEnd   = ((seg.endX   - w.startX) * dx + (seg.endY   - w.startY) * dy) / len2;
+          return tStart >= -0.01 && tEnd <= 1.01 && tStart < tEnd;
+        });
+
+        if (!parent) {
+          // No parent found (shouldn't happen) — create as plain internal wall
+          return {
+            id: nextWallId(), startX: seg.startX, startY: seg.startY,
+            endX: seg.endX, endY: seg.endY,
+            thickness: 0.1, height: 2.6, wallType: 'internal', isLoadBearing: false,
+            doors: [], windows: [], sortOrder: 0,
+          };
+        }
+
+        // Compute t_start and t_end of this sub-segment on the parent
+        const dx = parent.endX - parent.startX;
+        const dy = parent.endY - parent.startY;
+        const len2 = dx * dx + dy * dy;
+        const tStart = ((seg.startX - parent.startX) * dx + (seg.startY - parent.startY) * dy) / len2;
+        const tEnd   = ((seg.endX   - parent.startX) * dx + (seg.endY   - parent.startY) * dy) / len2;
+
+        // Migrate doors that fall in [tStart, tEnd]
+        const doors = (parent.doors ?? [])
+          .filter(d => d.position >= tStart - 0.001 && d.position <= tEnd + 0.001)
+          .map(d => ({ ...d, position: (d.position - tStart) / (tEnd - tStart) }));
+
+        // Migrate windows that fall in [tStart, tEnd]
+        const windows = (parent.windows ?? [])
+          .filter(w => w.position >= tStart - 0.001 && w.position <= tEnd + 0.001)
+          .map(w => ({ ...w, position: (w.position - tStart) / (tEnd - tStart) }));
+
+        return {
+          ...parent,
+          id: nextWallId(),
+          startX: seg.startX, startY: seg.startY,
+          endX: seg.endX, endY: seg.endY,
+          doors, windows,
+          sortOrder: 0,
+        };
+      });
+    };
+
+    const newStoredWalls = buildSplitWalls();
+
+    // Detect rooms using the split geometry
+    const polygons = detectRooms(allWallInputs);
 
     const rooms: RoomDef[] = polygons.map((poly, i) => ({
       id: nextRoomId(),
       label: `Room ${i + 1}`,
       roomType: 'bedroom',
       area: Math.round(poly.area * 100) / 100,
+      centroidX: Math.round(poly.centroid.x * 1000) / 1000,
+      centroidY: Math.round(poly.centroid.y * 1000) / 1000,
+      polygon: poly.vertices,
       sortOrder: i,
     }));
 
-    // Assign room adjacency to walls
-    const updatedWalls = walls.map(w => {
+    // Assign wall adjacency using the new stored walls
+    const TOL = 0.02;
+    const updatedWalls = newStoredWalls.map(w => {
       let posRoom: string | null = null;
       let negRoom: string | null = null;
       for (let ri = 0; ri < polygons.length; ri++) {
@@ -167,16 +239,17 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
         for (let vi = 0; vi < poly.vertices.length; vi++) {
           const v1 = poly.vertices[vi];
           const v2 = poly.vertices[(vi + 1) % poly.vertices.length];
-          // Check if this wall is (approximately) this polygon edge
-          const match1 = Math.abs(w.startX - v1.x) < TOL && Math.abs(w.startY - v1.y) < TOL && Math.abs(w.endX - v2.x) < TOL && Math.abs(w.endY - v2.y) < TOL;
-          const match2 = Math.abs(w.startX - v2.x) < TOL && Math.abs(w.startY - v2.y) < TOL && Math.abs(w.endX - v1.x) < TOL && Math.abs(w.endY - v1.y) < TOL;
+          const match1 = Math.abs(w.startX - v1.x) < TOL && Math.abs(w.startY - v1.y) < TOL
+            && Math.abs(w.endX - v2.x) < TOL && Math.abs(w.endY - v2.y) < TOL;
+          const match2 = Math.abs(w.startX - v2.x) < TOL && Math.abs(w.startY - v2.y) < TOL
+            && Math.abs(w.endX - v1.x) < TOL && Math.abs(w.endY - v1.y) < TOL;
           if (match1 || match2) {
             if (!posRoom) posRoom = rooms[ri].id!;
             else if (!negRoom) negRoom = rooms[ri].id!;
           }
         }
       }
-      return { ...w, positiveRoomId: posRoom ?? w.positiveRoomId, negativeRoomId: negRoom ?? w.negativeRoomId };
+      return { ...w, positiveRoomId: posRoom ?? null, negativeRoomId: negRoom ?? null };
     });
 
     set({ rooms, walls: updatedWalls });
@@ -224,16 +297,31 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
 
   addFurniture: (item) => {
     pushUndo(get());
-    set((s) => ({ furniture: [...s.furniture, { ...item, id: item.id ?? `furn_${Date.now()}` }] }));
+    set((s) => ({ furniture: [...s.furniture, { labelPosition: 'center', ...item, id: item.id ?? `furn_${Date.now()}` }] }));
   },
 
   updateFurniture: (id, updates) => {
+    pushUndo(get());
     set((s) => ({ furniture: s.furniture.map((f) => (f.id === id ? { ...f, ...updates } : f)) }));
   },
 
   removeFurniture: (id) => {
     pushUndo(get());
     set((s) => ({ furniture: s.furniture.filter((f) => f.id !== id), selectedFurnitureId: null }));
+  },
+
+  duplicateFurniture: (id) => {
+    const state = get();
+    const original = state.furniture.find(f => f.id === id);
+    if (!original) return;
+    pushUndo(state);
+    const copy: PlacedFurniture = {
+      ...original,
+      id: `furn_${Date.now()}`,
+      x: original.x + 0.3,
+      y: original.y + 0.3,
+    };
+    set((s) => ({ furniture: [...s.furniture, copy], selectedFurnitureId: copy.id! }));
   },
 
   selectFurniture: (id) => set({ selectedFurnitureId: id, selectedWallId: null, selectedRoomId: null }),
