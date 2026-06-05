@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import passport from './passport';
 import { signJwt, verifyJwt } from './jwt';
-import type { User } from '@prisma/client';
+import type { User } from '../generated/client';
 
 const router = Router();
 const isProd = process.env.NODE_ENV === 'production';

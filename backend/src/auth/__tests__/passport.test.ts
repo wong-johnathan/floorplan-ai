@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, afterAll } from 'vitest';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../../generated/client';
 import { upsertGoogleUser } from '../passport';
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });

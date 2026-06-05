@@ -19,3 +19,13 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   req.user = payload;
   next();
 }
+
+export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction): void {
+  requireAuth(req, res, () => {
+    if (req.user?.role !== 'admin') {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+    next();
+  });
+}

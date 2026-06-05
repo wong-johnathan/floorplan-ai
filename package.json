@@ -1,0 +1,9 @@
+{
+  "devDependencies": {
+    "@types/express": "^4.17.25"
+  },
+  "dependencies": {
+    "konva": "^10.3.0",
+    "react-konva": "^19.2.4"
+  }
+}

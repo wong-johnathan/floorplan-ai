@@ -1,18 +1,195 @@
+// Prisma schema for floorplan-ai backend
+// Database: PostgreSQL (via @prisma/adapter-pg)
+//
+// HDB Hierarchy: Town → Project → FlatType → LayoutVariant → Walls/Rooms
+//
+// FlatType = HDB room category (e.g. "4-Room" = 3 bedrooms + living/dining)
+// LayoutVariant = specific floor plan within a flat type
+//   (e.g. 2-Room Flexi has Type 1 and Type 2 variants;
+//    newer projects offer "Standard" vs "White Flat" open-concept layouts)
+//
+// HDB terminology: room count INCLUDES the living room.
+//   4-Room = 3 bedrooms, 3-Room = 2 bedrooms, etc.
+
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../src/generated"
 }
 
 datasource db {
   provider = "postgresql"
 }
 
+// ─── Auth ────────────────────────────────────────────────────────
+
 model User {
-  id        String   @id @default(cuid())
+  id        String   @id @default(uuid())
   googleId  String   @unique
-  email     String   @unique
+  email     String      @unique
   name      String
   avatarUrl String?
   role      String   @default("user")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ─── BTO Projects ───────────────────────────────────────────────
+
+model BTOProject {
+  id             String       @id @default(cuid())
+  name           String
+  slug           String       @unique
+  description    String?
+  town           String       // HDB town: "Kallang", "Tampines", "Queenstown", etc.
+  location       String       // Display location: "Kallang", "Tampines North", etc.
+  launchYear     Int
+  classification String       @default("standard") // "standard" | "plus" | "prime" (HDB Oct 2024 framework)
+  developer      String       @default("HDB")
+  imageUrl       String?
+  published      Boolean      @default(false)
+  flatTypes      FlatType[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([published, launchYear])
+  @@index([town])
+}
+
+// ─── Flat Types (HDB room categories) ────────────────────────────
+
+model FlatType {
+  id             String          @id @default(cuid())
+  btoProjectId   String
+  btoProject     BTOProject      @relation(fields: [btoProjectId], references: [id], onDelete: Cascade)
+  name           String          // "2-Room Flexi", "3-Room", "4-Room", "5-Room", "3Gen"
+  bedroomCount   Int             // Derived: 2-Room=1, 3-Room=2, 4-Room=3, 5-Room=3, 3Gen=4
+  typicalSizeMin Float?          // sqm (e.g. 89 for 4-room)
+  typicalSizeMax Float?          // sqm (e.g. 94 for 4-room)
+  sortOrder      Int             @default(0)
+  variants       LayoutVariant[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([btoProjectId])
+}
+
+// ─── Layout Variants (specific floor plans within a flat type) ───
+
+model LayoutVariant {
+  id           String        @id @default(cuid())
+  flatTypeId   String
+  flatType     FlatType      @relation(fields: [flatTypeId], references: [id], onDelete: Cascade)
+  name         String        // "Standard", "White Flat", "Type 1", "Type 2"
+  floorPlanUrl String?       // Uploaded floor plan image
+  thumbnailUrl String?
+  totalArea    Float?        // sqm for this specific variant
+  isWhiteFlat  Boolean       @default(false) // Open-concept, no internal partition walls
+  published    Boolean       @default(false)
+  sortOrder    Int           @default(0)
+  walls        WallSegment[]
+  roomDefs     RoomDef[]
+  furniture    Json?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([flatTypeId, published])
+}
+
+// ─── Walls ───────────────────────────────────────────────────────
+
+model WallSegment {
+  id               String          @id @default(cuid())
+  layoutVariantId  String
+  layoutVariant    LayoutVariant   @relation(fields: [layoutVariantId], references: [id], onDelete: Cascade)
+
+  // 2D coordinates on the floor plan (metres from origin)
+  startX        Float
+  startY        Float
+  endX          Float
+  endY          Float
+
+  // Physical properties (HDB standards: structural 100-150mm, partition 75-100mm)
+  thickness     Float      @default(0.10)  // 100mm non-structural wall
+  height        Float      @default(2.6)   // HDB ceiling height
+  wallType      String     @default("internal") // "internal" | "external" | "party"
+  isLoadBearing Boolean    @default(false)
+
+  // Adjacency: which rooms are on each side
+  // "positive" = right-hand side of directed edge (start → end)
+  // "negative" = left-hand side of directed edge (start → end)
+  positiveRoomId String?
+  positiveRoom   RoomDef?        @relation("positiveRoom", fields: [positiveRoomId], references: [id])
+  negativeRoomId String?
+  negativeRoom   RoomDef?        @relation("negativeRoom", fields: [negativeRoomId], references: [id])
+
+  // Openings in this wall
+  doors         DoorOpening[]
+  windows       WindowOpening[]
+
+  // Admin metadata
+  sortOrder     Int             @default(0)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([layoutVariantId])
+}
+
+// ─── Door Openings ───────────────────────────────────────────────
+
+model DoorOpening {
+  id            String      @id @default(cuid())
+  wallSegmentId String
+  wallSegment   WallSegment @relation(fields: [wallSegmentId], references: [id], onDelete: Cascade)
+
+  // Position along the wall (percentage from start to end, 0.0-1.0)
+  position      Float       // 0.0 = at start, 1.0 = at end
+  width         Float       @default(0.9)   // metres
+  height        Float       @default(2.1)   // metres
+  swing         String      @default("in")  // "in" | "out"
+  hinge         String      @default("left") // "left" | "right"
+  doorType      String      @default("swing") // "swing" | "folding"
+  length        Float?
+
+  @@index([wallSegmentId])
+}
+
+// ─── Window Openings ─────────────────────────────────────────────
+
+model WindowOpening {
+  id            String      @id @default(cuid())
+  wallSegmentId String
+  wallSegment   WallSegment @relation(fields: [wallSegmentId], references: [id], onDelete: Cascade)
+
+  position      Float       // 0.0-1.0 along wall
+  width         Float       @default(1.2)
+
+  @@index([wallSegmentId])
+}
+
+// ─── Rooms (Derived from Walls) ──────────────────────────────────
+
+model RoomDef {
+  id              String       @id @default(cuid())
+  layoutVariantId String
+  layoutVariant   LayoutVariant @relation(fields: [layoutVariantId], references: [id], onDelete: Cascade)
+
+  label             String     // "Living Room", "Master Bedroom"
+  roomType          String     @default("bedroom") // "living" | "bedroom_master" | "bedroom" | "kitchen" | "toilet" | "bomb_shelter" | "service_yard" | "hallway" | "balcony"
+  originalRoomType  String?    // What admin originally labelled (for reference after wall edits)
+  area              Float?      // Room area in sqm (e.g. 14.5 for Master Bedroom)
+
+  // Material defaults
+  defaultWallColor  String   @default("#F5F5F0")
+  defaultFloorType  String   @default("parquet")
+  defaultFloorColor String   @default("#C4A882")
+
+  // Wall adjacency (reverse relations)
+  positiveWalls WallSegment[] @relation("positiveRoom")
+  negativeWalls WallSegment[] @relation("negativeRoom")
+
+  sortOrder     Int          @default(0)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([layoutVariantId])
 }

@@ -8,10 +8,31 @@ export async function upsertGoogleUser(profile: {
   name: string;
   avatarUrl: string | null;
 }) {
-  return prisma.user.upsert({
-    where: { googleId: profile.id },
-    update: { email: profile.email, name: profile.name, avatarUrl: profile.avatarUrl },
-    create: {
+  // 1. Try to find by email first (connects seeded admin user to real Google login)
+  const byEmail = profile.email
+    ? await prisma.user.findUnique({ where: { email: profile.email } })
+    : null;
+
+  if (byEmail) {
+    // Update the googleId to the real one, preserve role (e.g., admin from seed)
+    return prisma.user.update({
+      where: { id: byEmail.id },
+      data: { googleId: profile.id, name: profile.name, avatarUrl: profile.avatarUrl },
+    });
+  }
+
+  // 2. Try by googleId (subsequent logins after first)
+  const byGoogle = await prisma.user.findUnique({ where: { googleId: profile.id } });
+  if (byGoogle) {
+    return prisma.user.update({
+      where: { id: byGoogle.id },
+      data: { email: profile.email, name: profile.name, avatarUrl: profile.avatarUrl },
+    });
+  }
+
+  // 3. Create new user
+  return prisma.user.create({
+    data: {
       googleId: profile.id,
       email: profile.email,
       name: profile.name,
