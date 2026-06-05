@@ -5,11 +5,15 @@ import { useAnnotationStore } from '../../stores/adminAnnotationStore';
 import { FURNITURE_CATALOG } from '../../lib/furnitureCatalog';
 import { FurnitureOutlines } from '../../lib/furnitureOutlines';
 
-interface Props { floorPlanUrl: string | null; }
+interface Props {
+  floorPlanUrl: string | null;
+  onRoomClick?: (roomId: string, screenX: number, screenY: number) => void;
+}
 
 const PIXELS_PER_METRE = 100; // Default: 100px = 1 metre
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 5;
+const VERTEX_MATCH_TOL = 0.05;
 
 const ROOM_COLORS: Record<string, string> = {
   living: '#F5F0E8', bedroom_master: '#E8ECF5', bedroom: '#EEF5EA',
@@ -17,7 +21,7 @@ const ROOM_COLORS: Record<string, string> = {
   service_yard: '#F5F5F0', hallway: '#F8F8F5', balcony: '#EAF5F0',
 };
 
-export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
+export function WallAnnotationCanvas({ floorPlanUrl, onRoomClick }: Props) {
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
 
@@ -54,6 +58,9 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
   const removeFurniture = useAnnotationStore(s => s.removeFurniture);
   const selectFurniture = useAnnotationStore(s => s.selectFurniture);
   const setPlacingFurnitureType = useAnnotationStore(s => s.setPlacingFurnitureType);
+  const isLabelingMode = useAnnotationStore(s => s.isLabelingMode);
+  const activeLabelRoomIndex = useAnnotationStore(s => s.activeLabelRoomIndex);
+  const labelingOrder = useAnnotationStore(s => s.labelingOrder);
 
   useEffect(() => {
     const tr = transformerRef.current;
@@ -403,6 +410,16 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
     gridLines.push(<Line key={`gv${i}`} points={[toScreen(pos), toScreen(-gridExtent), toScreen(pos), toScreen(gridExtent)]} stroke="#e8e8e8" strokeWidth={0.5} listening={false} />);
   }
 
+  function fireRoomClick(room: typeof rooms[0]) {
+    if (!onRoomClick || room.centroidX == null || room.centroidY == null) return;
+    const stage = stageRef.current;
+    if (!stage) return;
+    const stageBox = stage.container().getBoundingClientRect();
+    const sx = room.centroidX * PIXELS_PER_METRE * zoom + pan.x + stageBox.left;
+    const sy = room.centroidY * PIXELS_PER_METRE * zoom + pan.y + stageBox.top;
+    onRoomClick(room.id!, sx, sy);
+  }
+
   return (
     <div ref={containerRef} className="relative w-full h-full overflow-hidden min-w-0">
       {/* Zoom controls — bottom center */}
@@ -446,13 +463,6 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
         {gridLines}
 
         <Group opacity={wallOpacity}>
-        {/* Room fills */}
-        {rooms.map(room => {
-          const poly = getRoomPolygon(room.id!); if (!poly) return null;
-          const flat = poly.flatMap(p => [toScreen(p.x), toScreen(p.y)]);
-          return <Line key={`fill-${room.id}`} points={flat} closed fill={ROOM_COLORS[room.roomType ?? 'bedroom'] || '#eee'} stroke="#d4d4d4" strokeWidth={1} listening={false} opacity={0.5} />;
-        })}
-
         {/* Walls — split into segments around door openings */}
         {walls.filter(w => w.isLoadBearing || w.wallType === 'external').map(w =>
           wallSegs(w).map((s, si) => (
@@ -678,15 +688,103 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
           ));
         })()}
 
-        {/* Room labels */}
+        {/* Mode B — Room vertex handles */}
+        {selectedRoomId && tool === 'select' && !isLabelingMode && (() => {
+          const room = rooms.find(r => r.id === selectedRoomId);
+          if (!room?.polygon || room.polygon.length === 0) return null;
+          return room.polygon.map((vertex, vi) => {
+            // Find which wall(s) have an endpoint at this vertex
+            const matchingWalls = walls.filter(w =>
+              (Math.abs(w.startX - vertex.x) < VERTEX_MATCH_TOL && Math.abs(w.startY - vertex.y) < VERTEX_MATCH_TOL) ||
+              (Math.abs(w.endX   - vertex.x) < VERTEX_MATCH_TOL && Math.abs(w.endY   - vertex.y) < VERTEX_MATCH_TOL)
+            );
+            const isLoadBearing = matchingWalls.some(w => w.isLoadBearing || w.wallType === 'external');
+            return (
+              <Circle
+                key={`rv-${room.id}-${vi}`}
+                x={vertex.x * PIXELS_PER_METRE}
+                y={vertex.y * PIXELS_PER_METRE}
+                radius={6 / zoom}
+                fill="white"
+                stroke={isLoadBearing ? '#ef4444' : '#22c55e'}
+                strokeWidth={2 / zoom}
+                draggable={!isLoadBearing}
+                title={matchingWalls.length > 2 ? 'Moving this also adjusts adjacent rooms' : undefined}
+                onDragEnd={e => {
+                  const raw = { x: e.target.x() / PIXELS_PER_METRE, y: e.target.y() / PIXELS_PER_METRE };
+                  const snapped = snapToGrid(raw);
+                  const finalPt = endpointSnap(snapped);
+                  // Move all wall endpoints at this vertex
+                  matchingWalls.forEach(w => {
+                    const atStart = Math.abs(w.startX - vertex.x) < VERTEX_MATCH_TOL && Math.abs(w.startY - vertex.y) < VERTEX_MATCH_TOL;
+                    if (atStart) {
+                      useAnnotationStore.getState().updateWall(w.id!, { startX: finalPt.x, startY: finalPt.y });
+                    } else {
+                      useAnnotationStore.getState().updateWall(w.id!, { endX: finalPt.x, endY: finalPt.y });
+                    }
+                  });
+                  e.target.position({ x: finalPt.x * PIXELS_PER_METRE, y: finalPt.y * PIXELS_PER_METRE });
+                }}
+                onDragStart={e => { if (isLoadBearing) e.target.stopDrag(); }}
+              />
+            );
+          });
+        })()}
+
+        {/* Room polygons with fill + highlight */}
         {rooms.map(room => {
-          const poly = getRoomPolygon(room.id!); if (!poly) return null;
-          const cx = poly.reduce((s, p) => s + p.x, 0) / poly.length;
-          const cy = poly.reduce((s, p) => s + p.y, 0) / poly.length;
+          const poly = getRoomPolygon(room.id!);
+          if (!poly) return null;
+          const flat = poly.flatMap(p => [toScreen(p.x), toScreen(p.y)]);
+          const cx = room.centroidX ?? poly.reduce((s, p) => s + p.x, 0) / poly.length;
+          const cy = room.centroidY ?? poly.reduce((s, p) => s + p.y, 0) / poly.length;
+          const isActiveWizardRoom = isLabelingMode && labelingOrder[activeLabelRoomIndex] === room.id;
+          const isDimmed = isLabelingMode && !isActiveWizardRoom;
           return (
-            <Group key={`rl-${room.id}`} onClick={() => selectRoom(room.id ?? null)}>
-              <Text x={toScreen(cx) - 55} y={toScreen(cy) - 12} text={room.label} fontSize={12} fontStyle="bold" fill={selectedRoomId === room.id ? '#2563EB' : '#374151'} align="center" width={110} />
-              {room.area && <Text x={toScreen(cx) - 55} y={toScreen(cy) + 2} text={`${room.area} sqm`} fontSize={9} fill="#888" align="center" width={110} />}
+            <Group key={`room-${room.id}`}>
+              {/* Fill polygon */}
+              <Line
+                points={flat}
+                closed
+                fill={ROOM_COLORS[room.roomType ?? 'bedroom'] || '#eee'}
+                stroke={isActiveWizardRoom ? '#6382ff' : '#d4d4d4'}
+                strokeWidth={isActiveWizardRoom ? 3 / zoom : 1}
+                opacity={isDimmed ? 0.3 : 0.5}
+                listening={!isLabelingMode}
+                onClick={() => {
+                  selectRoom(room.id ?? null);
+                  fireRoomClick(room);
+                }}
+              />
+              {/* Room label text */}
+              <Group onClick={() => {
+                selectRoom(room.id ?? null);
+                fireRoomClick(room);
+              }}>
+                <Text
+                  x={toScreen(cx) - 55}
+                  y={toScreen(cy) - 12}
+                  text={room.label}
+                  fontSize={12}
+                  fontStyle="bold"
+                  fill={selectedRoomId === room.id ? '#2563EB' : '#374151'}
+                  align="center"
+                  width={110}
+                  opacity={isDimmed ? 0.5 : 1}
+                />
+                {room.area && (
+                  <Text
+                    x={toScreen(cx) - 55}
+                    y={toScreen(cy) + 2}
+                    text={`${room.area} sqm`}
+                    fontSize={9}
+                    fill="#888"
+                    align="center"
+                    width={110}
+                    opacity={isDimmed ? 0.5 : 1}
+                  />
+                )}
+              </Group>
             </Group>
           );
         })}
