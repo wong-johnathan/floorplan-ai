@@ -23,8 +23,6 @@ interface AnnotationState {
   wallSnap: boolean;
   snapDistance: number; // Wall snap distance in metres
   showBackground: boolean;
-  showFurniture: boolean;
-  showFurnitureLabels: boolean;
   wallOpacity: number;  // 0.2–1.0
   orthoLock: boolean;
   drawStart: Point | null;
@@ -56,7 +54,6 @@ interface AnnotationState {
   addFurniture: (item: PlacedFurniture) => void;
   updateFurniture: (id: string, updates: Partial<PlacedFurniture>) => void;
   removeFurniture: (id: string) => void;
-  duplicateFurniture: (id: string) => void;
   selectFurniture: (id: string | null) => void;
   setPlacingFurnitureType: (type: string | null) => void;
   loadAnnotation: (walls: WallSegment[], rooms: RoomDef[], furniture?: PlacedFurniture[]) => void;
@@ -99,8 +96,6 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   wallSnap: true,
   snapDistance: 0.08, // ~8px at 100px/m
   showBackground: true,
-  showFurniture: true,
-  showFurnitureLabels: false,
   wallOpacity: 0.8,
   orthoLock: false,
   drawStart: null,
@@ -149,7 +144,9 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   setIsDrawing: (v) => set({ isDrawing: v }),
 
   detectAndSetRooms: () => {
-    const { walls } = get();
+    const state = get();
+    pushUndo(state);
+    const { walls } = state;
     if (walls.length < 3) return;
 
     const allWallInputs = walls.map(w => ({
@@ -160,7 +157,11 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
     const splitInputs = splitWalls(allWallInputs);
 
     // Build a mapping: for each split segment, find its parent wall (by checking
-    // which original wall contains the segment's start point)
+    // which original wall contains the segment's start point).
+    // Track assigned door/window indices per parent to avoid duplication at split boundaries.
+    const assignedDoors = new Map<string, Set<number>>();
+    const assignedWindows = new Map<string, Set<number>>();
+
     const buildSplitWalls = (): WallSegment[] => {
       return splitInputs.map(seg => {
         // Find the original wall this segment came from
@@ -192,15 +193,35 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
         const tStart = ((seg.startX - parent.startX) * dx + (seg.startY - parent.startY) * dy) / len2;
         const tEnd   = ((seg.endX   - parent.startX) * dx + (seg.endY   - parent.startY) * dy) / len2;
 
-        // Migrate doors that fall in [tStart, tEnd]
-        const doors = (parent.doors ?? [])
-          .filter(d => d.position >= tStart - 0.001 && d.position <= tEnd + 0.001)
-          .map(d => ({ ...d, position: (d.position - tStart) / (tEnd - tStart) }));
+        const parentKey = parent.id!;
 
-        // Migrate windows that fall in [tStart, tEnd]
+        // Migrate doors — assign each door index to at most one sub-segment (first match wins)
+        if (!assignedDoors.has(parentKey)) assignedDoors.set(parentKey, new Set());
+        const usedDoorIndices = assignedDoors.get(parentKey)!;
+        const doors = (parent.doors ?? [])
+          .map((d, idx) => ({ d, idx }))
+          .filter(({ d, idx }) =>
+            !usedDoorIndices.has(idx) &&
+            d.position >= tStart - 0.001 && d.position <= tEnd + 0.001
+          )
+          .map(({ d, idx }) => {
+            usedDoorIndices.add(idx);
+            return { ...d, position: (d.position - tStart) / (tEnd - tStart) };
+          });
+
+        // Migrate windows — same deduplication approach
+        if (!assignedWindows.has(parentKey)) assignedWindows.set(parentKey, new Set());
+        const usedWindowIndices = assignedWindows.get(parentKey)!;
         const windows = (parent.windows ?? [])
-          .filter(w => w.position >= tStart - 0.001 && w.position <= tEnd + 0.001)
-          .map(w => ({ ...w, position: (w.position - tStart) / (tEnd - tStart) }));
+          .map((w, idx) => ({ w, idx }))
+          .filter(({ w, idx }) =>
+            !usedWindowIndices.has(idx) &&
+            w.position >= tStart - 0.001 && w.position <= tEnd + 0.001
+          )
+          .map(({ w, idx }) => {
+            usedWindowIndices.add(idx);
+            return { ...w, position: (w.position - tStart) / (tEnd - tStart) };
+          });
 
         return {
           ...parent,
@@ -208,7 +229,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
           startX: seg.startX, startY: seg.startY,
           endX: seg.endX, endY: seg.endY,
           doors, windows,
-          sortOrder: 0,
+          sortOrder: parent.sortOrder,
         };
       });
     };
@@ -252,7 +273,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
       return { ...w, positiveRoomId: posRoom ?? null, negativeRoomId: negRoom ?? null };
     });
 
-    set({ rooms, walls: updatedWalls });
+    set({ rooms, walls: updatedWalls, selectedWallId: null, selectedRoomId: null });
   },
 
   updateRoom: (id, updates) => {
@@ -297,31 +318,16 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
 
   addFurniture: (item) => {
     pushUndo(get());
-    set((s) => ({ furniture: [...s.furniture, { labelPosition: 'center', ...item, id: item.id ?? `furn_${Date.now()}` }] }));
+    set((s) => ({ furniture: [...s.furniture, { ...item, id: item.id ?? `furn_${Date.now()}` }] }));
   },
 
   updateFurniture: (id, updates) => {
-    pushUndo(get());
     set((s) => ({ furniture: s.furniture.map((f) => (f.id === id ? { ...f, ...updates } : f)) }));
   },
 
   removeFurniture: (id) => {
     pushUndo(get());
     set((s) => ({ furniture: s.furniture.filter((f) => f.id !== id), selectedFurnitureId: null }));
-  },
-
-  duplicateFurniture: (id) => {
-    const state = get();
-    const original = state.furniture.find(f => f.id === id);
-    if (!original) return;
-    pushUndo(state);
-    const copy: PlacedFurniture = {
-      ...original,
-      id: `furn_${Date.now()}`,
-      x: original.x + 0.3,
-      y: original.y + 0.3,
-    };
-    set((s) => ({ furniture: [...s.furniture, copy], selectedFurnitureId: copy.id! }));
   },
 
   selectFurniture: (id) => set({ selectedFurnitureId: id, selectedWallId: null, selectedRoomId: null }),
