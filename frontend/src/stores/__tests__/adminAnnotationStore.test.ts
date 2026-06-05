@@ -83,3 +83,93 @@ describe('detectAndSetRooms', () => {
     expect(leftHalf!.doors![0].position).toBeCloseTo(0.5, 2);
   });
 });
+
+describe('labeling mode', () => {
+  it('enterLabelingMode sets isLabelingMode=true and builds labelingOrder from unlabeled rooms', () => {
+    useAnnotationStore.getState().loadAnnotation(
+      RECT_WALLS.map((w, i) => ({ ...w, id: `w${i}`, thickness: 0.1, height: 2.6, wallType: 'internal' as const, isLoadBearing: false, doors: [], windows: [] })),
+      []
+    );
+    useAnnotationStore.getState().detectAndSetRooms();
+    useAnnotationStore.getState().enterLabelingMode();
+    const { isLabelingMode, labelingOrder, rooms } = useAnnotationStore.getState();
+    expect(isLabelingMode).toBe(true);
+    expect(labelingOrder).toHaveLength(rooms.length);
+  });
+
+  it('exitLabelingMode sets isLabelingMode=false', () => {
+    useAnnotationStore.getState().enterLabelingMode();
+    useAnnotationStore.getState().exitLabelingMode();
+    expect(useAnnotationStore.getState().isLabelingMode).toBe(false);
+  });
+
+  it('advanceLabelRoom increments activeLabelRoomIndex', () => {
+    useAnnotationStore.getState().loadAnnotation(
+      [
+        { id: 'w0', startX: 0, startY: 0, endX: 4, endY: 0, thickness: 0.1, height: 2.6, wallType: 'internal' as const, isLoadBearing: false, doors: [], windows: [] },
+        { id: 'w1', startX: 4, startY: 0, endX: 4, endY: 3, thickness: 0.1, height: 2.6, wallType: 'internal' as const, isLoadBearing: false, doors: [], windows: [] },
+        { id: 'w2', startX: 4, startY: 3, endX: 0, endY: 3, thickness: 0.1, height: 2.6, wallType: 'internal' as const, isLoadBearing: false, doors: [], windows: [] },
+        { id: 'w3', startX: 0, startY: 3, endX: 0, endY: 0, thickness: 0.1, height: 2.6, wallType: 'internal' as const, isLoadBearing: false, doors: [], windows: [] },
+        { id: 'w4', startX: 2, startY: 0, endX: 2, endY: 3, thickness: 0.1, height: 2.6, wallType: 'internal' as const, isLoadBearing: false, doors: [], windows: [] },
+      ], []
+    );
+    useAnnotationStore.getState().detectAndSetRooms();
+    useAnnotationStore.getState().enterLabelingMode();
+    expect(useAnnotationStore.getState().activeLabelRoomIndex).toBe(0);
+    useAnnotationStore.getState().advanceLabelRoom();
+    expect(useAnnotationStore.getState().activeLabelRoomIndex).toBe(1);
+  });
+
+  it('advanceLabelRoom closes wizard when all rooms labeled', () => {
+    useAnnotationStore.getState().loadAnnotation(
+      RECT_WALLS.map((w, i) => ({ ...w, id: `w${i}`, thickness: 0.1, height: 2.6, wallType: 'internal' as const, isLoadBearing: false, doors: [], windows: [] })),
+      []
+    );
+    useAnnotationStore.getState().detectAndSetRooms();
+    useAnnotationStore.getState().enterLabelingMode();
+    // There is 1 room; label it
+    const { rooms } = useAnnotationStore.getState();
+    useAnnotationStore.getState().updateRoom(rooms[0].id!, { label: 'Living Room', roomType: 'living' });
+    useAnnotationStore.getState().advanceLabelRoom();
+    expect(useAnnotationStore.getState().isLabelingMode).toBe(false);
+  });
+});
+
+describe('preserveLabelsOnRedetect', () => {
+  it('inherits label when old room centroid falls inside new polygon', () => {
+    const newPolygons = [
+      {
+        vertices: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 3 }, { x: 0, y: 3 }],
+        area: 12,
+        centroid: { x: 2, y: 1.5 },
+      },
+    ];
+    const oldRooms = [
+      {
+        id: 'r1', label: 'Living Room', roomType: 'living',
+        centroidX: 2, centroidY: 1.5, area: 12,
+      },
+    ];
+    const result = useAnnotationStore.getState().preserveLabelsOnRedetect(newPolygons, oldRooms);
+    expect(result[0].label).toBe('Living Room');
+    expect(result[0].roomType).toBe('living');
+  });
+
+  it('assigns generic label when no old room contains the new centroid', () => {
+    const newPolygons = [
+      {
+        vertices: [{ x: 10, y: 10 }, { x: 14, y: 10 }, { x: 14, y: 13 }, { x: 10, y: 13 }],
+        area: 12,
+        centroid: { x: 12, y: 11.5 },
+      },
+    ];
+    const oldRooms = [
+      {
+        id: 'r1', label: 'Living Room', roomType: 'living',
+        centroidX: 2, centroidY: 1.5, area: 12,
+      },
+    ];
+    const result = useAnnotationStore.getState().preserveLabelsOnRedetect(newPolygons, oldRooms);
+    expect(result[0].label).toMatch(/^Room \d+/);
+  });
+});

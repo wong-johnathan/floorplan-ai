@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import type { WallSegment, RoomDef, PlacedFurniture } from '../types/admin';
-import { detectRooms, splitWalls } from '../lib/geometry/roomDetection';
+import { detectRooms, splitWalls, pointInPolygon } from '../lib/geometry/roomDetection';
+
+export interface RoomPolygonForPreserve {
+  vertices: { x: number; y: number }[];
+  area: number;
+  centroid: { x: number; y: number };
+}
 
 export type ToolMode = 'select' | 'draw-wall' | 'add-door' | 'add-window' | 'divider' | 'pan' | 'place-furniture';
 export type GridSize = 25 | 50 | 100; // cm
@@ -56,6 +62,20 @@ interface AnnotationState {
   removeFurniture: (id: string) => void;
   selectFurniture: (id: string | null) => void;
   setPlacingFurnitureType: (type: string | null) => void;
+  // Labeling mode
+  isLabelingMode: boolean;
+  activeLabelRoomIndex: number;
+  labelingOrder: string[];   // room IDs, largest-area first
+
+  // Actions
+  enterLabelingMode: () => void;
+  exitLabelingMode: () => void;
+  advanceLabelRoom: () => void;
+  preserveLabelsOnRedetect: (
+    newPolygons: RoomPolygonForPreserve[],
+    oldRooms: RoomDef[]
+  ) => RoomDef[];
+
   loadAnnotation: (walls: WallSegment[], rooms: RoomDef[], furniture?: PlacedFurniture[]) => void;
   reset: () => void;
   undo: () => void;
@@ -104,6 +124,9 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   cursorPos: null,
   undoStack: [],
   redoStack: [],
+  isLabelingMode: false,
+  activeLabelRoomIndex: 0,
+  labelingOrder: [],
 
   setTool: (tool) => set({ tool, isDrawing: false, drawStart: null, drawPreview: null }),
 
@@ -276,6 +299,71 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
     set({ rooms, walls: updatedWalls, selectedWallId: null, selectedRoomId: null });
   },
 
+  enterLabelingMode: () => {
+    const { rooms } = get();
+    // Only include rooms that still have generic labels
+    const unlabeled = rooms
+      .filter(r => /^Room \d+$/.test(r.label))
+      .sort((a, b) => (b.area ?? 0) - (a.area ?? 0))
+      .map(r => r.id!);
+    // All rooms labeled already — no-op
+    if (unlabeled.length === 0) return;
+    set({ isLabelingMode: true, activeLabelRoomIndex: 0, labelingOrder: unlabeled });
+  },
+
+  exitLabelingMode: () => set({ isLabelingMode: false }),
+
+  advanceLabelRoom: () => {
+    const { activeLabelRoomIndex, labelingOrder, rooms } = get();
+    const nextIndex = activeLabelRoomIndex + 1;
+    if (nextIndex >= labelingOrder.length) {
+      set({ isLabelingMode: false, activeLabelRoomIndex: 0 });
+      return;
+    }
+    // Skip already-labeled rooms in the order
+    const nextUnlabeled = labelingOrder.slice(nextIndex).findIndex(id => {
+      const r = rooms.find(r => r.id === id);
+      return r && /^Room \d+$/.test(r.label);
+    });
+    if (nextUnlabeled === -1) {
+      set({ isLabelingMode: false, activeLabelRoomIndex: 0 });
+    } else {
+      set({ activeLabelRoomIndex: nextIndex + nextUnlabeled });
+    }
+  },
+
+  preserveLabelsOnRedetect: (newPolygons, oldRooms) => {
+    return newPolygons.map((poly, i) => {
+      const match = oldRooms.find(r =>
+        r.centroidX !== undefined &&
+        r.centroidY !== undefined &&
+        pointInPolygon({ x: r.centroidX, y: r.centroidY }, poly.vertices)
+      );
+      if (match) {
+        return {
+          id: nextRoomId(),
+          label: match.label,
+          roomType: match.roomType,
+          area: Math.round(poly.area * 100) / 100,
+          centroidX: Math.round(poly.centroid.x * 1000) / 1000,
+          centroidY: Math.round(poly.centroid.y * 1000) / 1000,
+          polygon: poly.vertices,
+          sortOrder: i,
+        };
+      }
+      return {
+        id: nextRoomId(),
+        label: `Room ${i + 1}`,
+        roomType: 'bedroom',
+        area: Math.round(poly.area * 100) / 100,
+        centroidX: Math.round(poly.centroid.x * 1000) / 1000,
+        centroidY: Math.round(poly.centroid.y * 1000) / 1000,
+        polygon: poly.vertices,
+        sortOrder: i,
+      };
+    });
+  },
+
   updateRoom: (id, updates) => {
     set((s) => ({ rooms: s.rooms.map(r => r.id === id ? { ...r, ...updates } : r) }));
   },
@@ -340,7 +428,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   reset: () => {
     pushUndo(get());
     wallIdCounter = 0; roomIdCounter = 0;
-    set({ walls: [], rooms: [], furniture: [], selectedWallId: null, selectedRoomId: null, isDrawing: false, drawStart: null, drawPreview: null });
+    set({ walls: [], rooms: [], furniture: [], selectedWallId: null, selectedRoomId: null, isDrawing: false, drawStart: null, drawPreview: null, isLabelingMode: false, activeLabelRoomIndex: 0, labelingOrder: [] });
   },
 
   undo: () => {
