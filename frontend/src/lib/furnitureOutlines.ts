@@ -6,6 +6,7 @@
 
 function rp(ctx: CanvasRenderingContext2D, x: number, y: number, rw: number, rh: number, cr: number, w: number, h: number) {
   const rx = x * w, ry = y * h, pw = rw * w, ph = rh * h, r = cr * Math.min(w, h);
+  ctx.beginPath();
   if (r < 1) { ctx.rect(rx, ry, pw, ph); return; }
   ctx.moveTo(rx + r, ry); ctx.lineTo(rx + pw - r, ry);
   ctx.arcTo(rx + pw, ry, rx + pw, ry + r, r);
@@ -174,14 +175,13 @@ export const FurnitureOutlines: Record<string, (ctx: CanvasRenderingContext2D, w
   },
 
   'sofa-3s'(ctx, w, h) {
-    ctx.lineWidth = 1.5; ctx.strokeStyle = '#B8956A'; ctx.fillStyle = '#D4C4A8';
-    rp(ctx, 0, 0.12, 1, 0.76, 0.02, w, h); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#C8B090';
-    rp(ctx, 0.02, 0.04, 0.96, 0.22, 0.01, w, h); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#A08060'; ctx.lineWidth = 1; ctx.strokeStyle = '#8B6D50';
-    rp(ctx, 0, 0.08, 0.06, 0.84, 0.03, w, h); ctx.fill(); ctx.stroke();
-    rp(ctx, 0.94, 0.08, 0.06, 0.84, 0.03, w, h); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.strokeStyle = 'rgba(0,0,0,0.06)'; ctx.lineWidth = 0.5;
+    ctx.lineWidth = 1.5; ctx.strokeStyle = '#B8956A';
+    rp(ctx, 0, 0.12, 1, 0.76, 0.02, w, h); ctx.stroke();
+    rp(ctx, 0.02, 0.04, 0.96, 0.22, 0.01, w, h); ctx.stroke();
+    ctx.lineWidth = 1; ctx.strokeStyle = '#8B6D50';
+    rp(ctx, 0, 0.08, 0.06, 0.84, 0.03, w, h); ctx.stroke();
+    rp(ctx, 0.94, 0.08, 0.06, 0.84, 0.03, w, h); ctx.stroke();
+    ctx.beginPath(); ctx.strokeStyle = 'rgba(0,0,0,0.15)'; ctx.lineWidth = 0.5;
     ctx.moveTo(w * 0.32, h * 0.25); ctx.lineTo(w * 0.32, h * 0.82);
     ctx.moveTo(w * 0.65, h * 0.25); ctx.lineTo(w * 0.65, h * 0.82); ctx.stroke();
   },

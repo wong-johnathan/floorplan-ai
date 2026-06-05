@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
-import { Stage, Layer, Line, Circle, Text, Image as KonvaImage, Rect, Group, Arc, Shape } from 'react-konva';
+import { Stage, Layer, Line, Circle, Text, Image as KonvaImage, Rect, Group, Arc, Shape, Transformer } from 'react-konva';
 import type Konva from 'konva';
 import { useAnnotationStore } from '../../stores/adminAnnotationStore';
 import { FURNITURE_CATALOG } from '../../lib/furnitureCatalog';
@@ -19,6 +19,7 @@ const ROOM_COLORS: Record<string, string> = {
 
 export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
   const stageRef = useRef<Konva.Stage>(null);
+  const transformerRef = useRef<Konva.Transformer>(null);
 
   const [bgImage, setBgImage] = useState<HTMLImageElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -53,6 +54,17 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
   const selectFurniture = useAnnotationStore(s => s.selectFurniture);
   const setPlacingFurnitureType = useAnnotationStore(s => s.setPlacingFurnitureType);
 
+  useEffect(() => {
+    const tr = transformerRef.current;
+    const stage = stageRef.current;
+    if (!tr || !stage) return;
+    if (selectedFurnitureId) {
+      const node = stage.findOne(`#${selectedFurnitureId}`);
+      if (node) { tr.nodes([node]); tr.getLayer()?.batchDraw(); return; }
+    }
+    tr.nodes([]);
+    tr.getLayer()?.batchDraw();
+  }, [selectedFurnitureId, furniture]);
 
   const addWall = useAnnotationStore(s => s.addWall);
   const selectWall = useAnnotationStore(s => s.selectWall);
@@ -526,21 +538,44 @@ export function WallAnnotationCanvas({ floorPlanUrl }: Props) {
               onMouseOut={() => setHoveredFurn(null)}
               onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
                 updateFurniture(f.id!, { x: toMetres(e.target.x()), y: toMetres(e.target.y()) });
+              }}
+              onTransformEnd={(e) => {
+                const node = e.target;
+                const scaleX = node.scaleX(), scaleY = node.scaleY();
+                node.scaleX(1); node.scaleY(1);
+                updateFurniture(f.id!, {
+                  x: toMetres(node.x()), y: toMetres(node.y()),
+                  width: Math.max(0.1, f.width * scaleX),
+                  height: Math.max(0.1, f.height * scaleY),
+                  rotation: node.rotation(),
+                });
               }}>
               <Rect width={sw} height={sh}
                 fill="rgba(255,255,255,0.01)" strokeEnabled={false}
                 perfectDrawEnabled={false} />
               <Shape width={sw} height={sh}
                 sceneFunc={renderer ? (ctx: any) => {
-                  ctx._context.save();
-                  renderer(ctx._context, sw, sh);
-                  ctx._context.restore();
+                  const raw = ctx._context;
+                  raw.save();
+                  const origFill = raw.fill.bind(raw);
+                  raw.fill = () => {};
+                  renderer(raw, sw, sh);
+                  raw.fill = origFill;
+                  raw.restore();
                 } : undefined}
                 strokeEnabled={false}
                 listening={false} />
             </Group>
           );
         })}
+
+        <Transformer ref={transformerRef}
+          rotateEnabled={true} resizeEnabled={true}
+          borderEnabled={true} borderStroke="#2563EB" borderStrokeWidth={1} borderDash={[4, 3]}
+          anchorFill="white" anchorStroke="#2563EB" anchorStrokeWidth={1}
+          anchorSize={8} anchorCornerRadius={4}
+          rotateAnchorOffset={16}
+          boundBoxFunc={(oldBox, newBox) => (newBox.width < 10 || newBox.height < 10 ? oldBox : newBox)} />
 
         {/* Hover label */}
         {hoveredFurn && (() => {
