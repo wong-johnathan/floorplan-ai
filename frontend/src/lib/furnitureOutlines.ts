@@ -209,10 +209,11 @@ export const FurnitureOutlines: Record<string, (ctx: CanvasRenderingContext2D, w
   },
 
   'dining-chair'(ctx, w, h) {
-    ctx.lineWidth = 1.2; ctx.strokeStyle = '#8B7355'; ctx.fillStyle = '#C9A87C';
-    rp(ctx, 0.15, 0.25, 0.7, 0.7, 0.02, w, h); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#B8956A';
-    rp(ctx, 0.2, 0.02, 0.6, 0.28, 0.01, w, h); ctx.fill(); ctx.stroke();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = '#8B7355';
+    // Seat (main body)
+    rp(ctx, 0.05, 0.22, 0.9, 0.73, 0.08, w, h); ctx.stroke();
+    // Back rest (thin strip at top)
+    rp(ctx, 0.05, 0.02, 0.9, 0.16, 0.06, w, h); ctx.stroke();
   },
 
   'stool'(ctx, w, h) {

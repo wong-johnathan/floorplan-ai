@@ -17,6 +17,7 @@ export const FURNITURE_CATALOG: FurnitureDef[] = [
   { type: 'sofa-3s', label: 'Sofa (3-Seater)', category: 'Seating', defaultW: 2.1, defaultH: 0.85, color: '#C4A882' },
   { type: 'sofa-2s', label: 'Sofa (2-Seater)', category: 'Seating', defaultW: 1.6, defaultH: 0.85, color: '#C4A882' },
   { type: 'armchair', label: 'Armchair', category: 'Seating', defaultW: 0.9, defaultH: 0.85, color: '#C9A87C' },
+  { type: 'dining-chair', label: 'Dining Chair', category: 'Seating', defaultW: 0.45, defaultH: 0.45, color: '#C9A87C' },
 
   // Tables
   { type: 'table-round', label: 'Round Table', category: 'Tables', defaultW: 1.2, defaultH: 1.2, color: '#D4C4A8' },
