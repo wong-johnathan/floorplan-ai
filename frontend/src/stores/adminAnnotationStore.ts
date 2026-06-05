@@ -71,6 +71,7 @@ interface AnnotationState {
   enterLabelingMode: () => void;
   exitLabelingMode: () => void;
   advanceLabelRoom: () => void;
+  goBackLabelRoom: () => void;
   preserveLabelsOnRedetect: (
     newPolygons: RoomPolygonForPreserve[],
     oldRooms: RoomDef[]
@@ -312,6 +313,8 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   },
 
   exitLabelingMode: () => set({ isLabelingMode: false, activeLabelRoomIndex: 0, labelingOrder: [] }),
+
+  goBackLabelRoom: () => set(s => ({ activeLabelRoomIndex: Math.max(0, s.activeLabelRoomIndex - 1) })),
 
   advanceLabelRoom: () => {
     const { activeLabelRoomIndex, labelingOrder, rooms } = get();

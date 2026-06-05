@@ -20,6 +20,7 @@ export function RoomLabelingWizard() {
   const rooms = useAnnotationStore(s => s.rooms);
   const updateRoom = useAnnotationStore(s => s.updateRoom);
   const advanceLabelRoom = useAnnotationStore(s => s.advanceLabelRoom);
+  const goBackLabelRoom = useAnnotationStore(s => s.goBackLabelRoom);
   const exitLabelingMode = useAnnotationStore(s => s.exitLabelingMode);
 
   const [customName, setCustomName] = useState('');
@@ -92,9 +93,7 @@ export function RoomLabelingWizard() {
         {/* Navigation */}
         <div className="flex items-center gap-1 shrink-0">
           <button
-            onClick={() => useAnnotationStore.setState(s => ({
-              activeLabelRoomIndex: Math.max(0, s.activeLabelRoomIndex - 1),
-            }))}
+            onClick={goBackLabelRoom}
             disabled={activeLabelRoomIndex === 0}
             className="px-2 py-0.5 text-xs border border-zinc-200 rounded hover:bg-zinc-50 disabled:opacity-30"
           >
