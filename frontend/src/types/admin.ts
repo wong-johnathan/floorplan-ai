@@ -104,13 +104,9 @@ export interface RoomDef {
   polygon?: { x: number; y: number }[];
 }
 
-export type LabelPosition = 'top-right' | 'top-left' | 'top-center' | 'bottom-right' | 'bottom-left' | 'bottom-center' | 'middle-right' | 'middle-left' | 'center';
-
 export interface PlacedFurniture {
   id?: string;
   itemType: string;    // key from furniture catalog
-  label?: string;      // user-assigned custom name
-  labelPosition?: LabelPosition; // where to show the label on the shape
   x: number; y: number; // centre position (metres)
   width: number;        // metres
   height: number;       // metres
