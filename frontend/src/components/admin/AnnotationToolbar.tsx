@@ -17,6 +17,9 @@ export function AnnotationToolbar() {
   const redo = useAnnotationStore(s => s.redo);
   const undoStack = useAnnotationStore(s => s.undoStack);
   const redoStack = useAnnotationStore(s => s.redoStack);
+  const enterLabelingMode = useAnnotationStore(s => s.enterLabelingMode);
+  const rooms = useAnnotationStore(s => s.rooms);
+  const unlabeledCount = rooms.filter(r => /^Room \d+$/.test(r.label)).length;
 
   return (
     <div className="flex items-center gap-1 px-3 py-1.5 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 flex-wrap">
@@ -84,12 +87,27 @@ export function AnnotationToolbar() {
 
       <div className="w-px h-5 bg-zinc-200 dark:bg-zinc-700 mx-1" />
 
-      <div className="w-px h-5 bg-zinc-200 dark:bg-zinc-700 mx-1" />
-
-      <button onClick={detectAndSetRooms}
-        className="px-2.5 py-1 text-xs font-medium bg-blue-600 text-white rounded hover:bg-blue-700">
-        Auto-Detect Rooms
+      <button
+        onClick={detectAndSetRooms}
+        className="px-2.5 py-1 text-xs font-medium bg-blue-600 text-white rounded hover:bg-blue-700"
+      >
+        Detect Rooms
       </button>
+
+      {rooms.length > 0 && (
+        <button
+          onClick={enterLabelingMode}
+          className="px-2.5 py-1 text-xs font-medium bg-amber-500 text-white rounded hover:bg-amber-600 flex items-center gap-1"
+          title={unlabeledCount > 0 ? `${unlabeledCount} rooms need labels` : 'Re-open labeling wizard'}
+        >
+          Label Rooms
+          {unlabeledCount > 0 && (
+            <span className="bg-white text-amber-600 rounded-full px-1.5 text-xs font-bold leading-none py-0.5">
+              {unlabeledCount}
+            </span>
+          )}
+        </button>
+      )}
 
       <span className="flex-1" />
 
@@ -98,6 +116,20 @@ export function AnnotationToolbar() {
           onChange={e => useAnnotationStore.setState({ showBackground: e.target.checked })}
           className="rounded" />
         BG
+      </label>
+
+      <label className="flex items-center gap-1 text-xs text-zinc-600 cursor-pointer">
+        <input type="checkbox" checked={useAnnotationStore(s => s.showFurniture)}
+          onChange={e => useAnnotationStore.setState({ showFurniture: e.target.checked })}
+          className="rounded" />
+        Furniture
+      </label>
+
+      <label className="flex items-center gap-1 text-xs text-zinc-600 cursor-pointer">
+        <input type="checkbox" checked={useAnnotationStore(s => s.showFurnitureLabels)}
+          onChange={e => useAnnotationStore.setState({ showFurnitureLabels: e.target.checked })}
+          className="rounded" />
+        Labels
       </label>
 
       <label className="flex items-center gap-1 text-xs text-zinc-500">

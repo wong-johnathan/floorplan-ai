@@ -9,6 +9,8 @@ import { WallPropertyPanel } from '../../components/admin/WallPropertyPanel';
 import { RoomPropertyPanel } from '../../components/admin/RoomPropertyPanel';
 import { FurnitureSidebar } from '../../components/admin/FurnitureSidebar';
 import { FurniturePropertyPanel } from '../../components/admin/FurniturePropertyPanel';
+import { RoomLabelingWizard } from '../../components/admin/RoomLabelingWizard';
+import { RoomLabelPopup } from '../../components/admin/RoomLabelPopup';
 
 export function FlatModelAnnotatePage() {
   const { id } = useParams<{ id: string }>();
@@ -19,6 +21,10 @@ export function FlatModelAnnotatePage() {
   const [furnWidth, setFurnWidth] = useState(192);
   const [inspWidth, setInspWidth] = useState(280);
   const resizeRef = useRef<'furn' | 'insp' | null>(null);
+  const [popup, setPopup] = useState<{ roomId: string; screenX: number; screenY: number } | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const isLabelingMode = useAnnotationStore(s => s.isLabelingMode);
+  const enterLabelingMode = useAnnotationStore(s => s.enterLabelingMode);
 
   const store = useAnnotationStore(s => s);
   const { loadAnnotation, walls, rooms, furniture, selectedWallId, selectedRoomId, selectedFurnitureId, reset } = store;
@@ -33,6 +39,50 @@ export function FlatModelAnnotatePage() {
     return () => reset();
   }, [variant?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Auto-open labeling wizard when rooms are detected, and handle edge cases
+  const prevRoomsRef = useRef<number>(0);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    // Skip initial load (rooms haven't changed from 0)
+    if (rooms.length === 0 && prevRoomsRef.current === 0) {
+      prevRoomsRef.current = rooms.length;
+      return;
+    }
+
+    const showToast = (msg: string) => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      setToast(msg);
+      toastTimerRef.current = setTimeout(() => {
+        setToast(null);
+        toastTimerRef.current = null;
+      }, 4000);
+    };
+
+    // 0 rooms detected — show error toast
+    if (rooms.length === 0) {
+      showToast('No enclosed rooms detected — check for gaps in walls');
+      prevRoomsRef.current = 0;
+      return;
+    }
+
+    const unlabeled = rooms.filter(r => /^Room \d+$/.test(r.label));
+    if (unlabeled.length > 0 && rooms.length > prevRoomsRef.current) {
+      // Walls were split (room count increased) — show toast
+      if (prevRoomsRef.current > 0) {
+        showToast('Walls automatically split at junctions for clean room boundaries.');
+      }
+      enterLabelingMode();
+    }
+    prevRoomsRef.current = rooms.length;
+
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    };
+  }, [rooms.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const saveMutation = useMutation({
     mutationFn: () => saveAnnotation(id!, { walls, rooms, furniture }),
     onSuccess: () => setSaved(true),
@@ -44,6 +94,15 @@ export function FlatModelAnnotatePage() {
     onSuccess: () => { alert('Published!'); navigate(`/admin/bto/${variant?.flatType?.btoProjectId}`); },
     onError: (err: Error) => alert(`Publish failed: ${err.message}`),
   });
+
+  function handleRoomClick(roomId: string, screenX: number, screenY: number) {
+    if (isLabelingMode) return; // wizard is open; don't open popup
+    setPopup({ roomId, screenX, screenY });
+  }
+
+  function handleCanvasBackgroundClick() {
+    setPopup(null);
+  }
 
   // Resize panels — must be before any early return (rules of hooks)
   const startResize = useCallback((panel: 'furn' | 'insp') => (e: React.MouseEvent) => {
@@ -100,8 +159,31 @@ export function FlatModelAnnotatePage() {
       <AnnotationToolbar />
 
       {/* Main: canvas fills full area, panels float on top */}
-      <div className="flex-1 relative overflow-hidden">
-        <WallAnnotationCanvas floorPlanUrl={variant?.floorPlanUrl ?? null} />
+      <div className="flex-1 relative overflow-hidden" onClick={handleCanvasBackgroundClick}>
+        <WallAnnotationCanvas
+          floorPlanUrl={variant?.floorPlanUrl ?? null}
+          onRoomClick={handleRoomClick}
+        />
+
+        {/* Inline popup */}
+        {popup && !isLabelingMode && (
+          <RoomLabelPopup
+            roomId={popup.roomId}
+            screenX={popup.screenX}
+            screenY={popup.screenY}
+            onClose={() => setPopup(null)}
+          />
+        )}
+
+        {/* Toast notification */}
+        {toast && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-zinc-800 text-white text-xs px-4 py-2 rounded-full shadow-lg z-40 pointer-events-none">
+            {toast}
+          </div>
+        )}
+
+        {/* Labeling wizard pinned to bottom of canvas */}
+        {isLabelingMode && <RoomLabelingWizard />}
 
         {/* Furniture toggle button — always visible at left edge */}
         {!showFurniture && (
