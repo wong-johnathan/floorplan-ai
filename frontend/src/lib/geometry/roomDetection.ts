@@ -51,7 +51,7 @@ function segmentIntersection(a1: Point, a2: Point, b1: Point, b2: Point): Point 
  * Split walls at all intersection points so the half-edge graph
  * has vertices at every wall junction (T-junctions and X-crossings).
  */
-function splitWalls(walls: WallInput[]): WallInput[] {
+export function splitWalls(walls: WallInput[]): WallInput[] {
   // Step 1: Collect all split points per wall
   const wallList = walls.map((w, i) => ({ ...w, idx: i }));
   const splitPts: Point[][] = wallList.map(() => []);
@@ -240,4 +240,17 @@ function polygonCentroid(vertices: Point[]): Point {
   let cx = 0, cy = 0;
   for (const v of vertices) { cx += v.x; cy += v.y; }
   return { x: cx / vertices.length, y: cy / vertices.length };
+}
+
+export function pointInPolygon(point: Point, polygon: Point[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x, yi = polygon[i].y;
+    const xj = polygon[j].x, yj = polygon[j].y;
+    const intersect =
+      yi > point.y !== yj > point.y &&
+      point.x < ((xj - xi) * (point.y - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
 }
