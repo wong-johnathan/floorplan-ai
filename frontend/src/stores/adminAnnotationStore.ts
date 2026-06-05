@@ -311,7 +311,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
     set({ isLabelingMode: true, activeLabelRoomIndex: 0, labelingOrder: unlabeled });
   },
 
-  exitLabelingMode: () => set({ isLabelingMode: false }),
+  exitLabelingMode: () => set({ isLabelingMode: false, activeLabelRoomIndex: 0, labelingOrder: [] }),
 
   advanceLabelRoom: () => {
     const { activeLabelRoomIndex, labelingOrder, rooms } = get();
