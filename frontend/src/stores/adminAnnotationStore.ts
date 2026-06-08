@@ -57,9 +57,12 @@ interface AnnotationState {
   addWindow: (wallId: string, position: number) => void;
   removeDoor: (wallId: string, doorIndex: number) => void;
   removeWindow: (wallId: string, windowIndex: number) => void;
+  showFurniture: boolean;
+  showFurnitureLabels: boolean;
   addFurniture: (item: PlacedFurniture) => void;
   updateFurniture: (id: string, updates: Partial<PlacedFurniture>) => void;
   removeFurniture: (id: string) => void;
+  duplicateFurniture: (id: string) => void;
   selectFurniture: (id: string | null) => void;
   setPlacingFurnitureType: (type: string | null) => void;
   // Labeling mode
@@ -117,6 +120,8 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   wallSnap: true,
   snapDistance: 0.08, // ~8px at 100px/m
   showBackground: true,
+  showFurniture: true,
+  showFurnitureLabels: false,
   wallOpacity: 0.8,
   orthoLock: false,
   drawStart: null,
@@ -419,6 +424,14 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   removeFurniture: (id) => {
     pushUndo(get());
     set((s) => ({ furniture: s.furniture.filter((f) => f.id !== id), selectedFurnitureId: null }));
+  },
+
+  duplicateFurniture: (id) => {
+    const item = get().furniture.find(f => f.id === id);
+    if (!item) return;
+    pushUndo(get());
+    const newItem = { ...item, id: `furn_${Date.now()}`, x: item.x + 0.2, y: item.y + 0.2 };
+    set(s => ({ furniture: [...s.furniture, newItem], selectedFurnitureId: newItem.id }));
   },
 
   selectFurniture: (id) => set({ selectedFurnitureId: id, selectedWallId: null, selectedRoomId: null }),
